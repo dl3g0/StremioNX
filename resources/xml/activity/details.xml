@@ -1,0 +1,134 @@
+<brls:Box
+    width="100%"
+    height="100%"
+    axis="row">
+    
+    <!-- Background Image -->
+    <brls:Image
+        id="details/background"
+        width="100%"
+        height="100%"
+        positionType="absolute"
+        scalingType="fill" />
+        
+    <!-- Dark overlay to make text readable -->
+    <brls:Rectangle
+        width="100%"
+        height="100%"
+        positionType="absolute"
+        color="#181227D9" />
+        
+    <!-- Left Content (Flex 2) -->
+    <brls:Box
+        axis="column"
+        grow="2"
+        paddingTop="60"
+        paddingLeft="60"
+        paddingRight="40"
+        paddingBottom="60">
+        
+        <brls:Label
+            id="details/title"
+            fontSize="50"
+            text="TITLE"
+            marginBottom="30" />
+            
+        <!-- Metadata row -->
+        <brls:Box
+            axis="row"
+            marginBottom="30"
+            alignItems="center">
+            <brls:Label id="details/runtime" fontSize="20" text="141 min" marginRight="30" />
+            <brls:Label id="details/year" fontSize="20" text="2026" marginRight="30" />
+            <brls:Label id="details/rating" fontSize="20" text="6.5 IMDb" textColor="@theme/font/yellow_1" />
+        </brls:Box>
+        
+        <brls:Label fontSize="14" text="GENRES" textColor="@theme/font/grey" marginBottom="10" />
+        <brls:Box id="details/genres" axis="row" marginBottom="30" />
+        
+        <brls:Label fontSize="14" text="CAST" textColor="@theme/font/grey" marginBottom="10" />
+        <brls:Box id="details/cast" axis="row" marginBottom="30" />
+        
+        <brls:Label fontSize="14" text="DIRECTORS" textColor="@theme/font/grey" marginBottom="10" />
+        <brls:Box id="details/directors" axis="row" marginBottom="30" />
+        
+        <brls:Label fontSize="14" text="SUMMARY" textColor="@theme/font/grey" marginBottom="10" />
+        <brls:Label id="details/summary" fontSize="18" text="Summary text here..." />
+        
+        <!-- Spacer -->
+        <brls:Box grow="1" />
+        
+    </brls:Box>
+    
+    <!-- Right Sidebar for Streams -->
+    <brls:Box
+        id="details/streams_container"
+        axis="column"
+        width="31.7%"
+        backgroundColor="#0b0812F2"
+        padding="16">
+        
+        <!-- Header -->
+        <brls:Box axis="row" width="100%" marginBottom="15" alignItems="center">
+            <brls:Label id="details/streams_title" text="All" fontSize="20" grow="1" singleLine="true" />
+            <brls:Button id="details/btn_fuentes" text="Fuentes" fontSize="14" />
+        </brls:Box>
+
+        <!-- Loading state (spinner + text) while streams are being fetched.
+             Kept visible whenever an addon is slow so the sidebar is never blank. -->
+        <brls:Box
+            id="details/streams_loader"
+            axis="column"
+            grow="1"
+            justifyContent="center"
+            alignItems="center"
+            visibility="gone">
+            <brls:ProgressSpinner
+                id="details/streams_spinner"
+                width="50" height="50"
+                alignSelf="center"
+                marginBottom="20" />
+            <brls:Label
+                id="details/streams_loader_text"
+                text="Cargando fuentes..."
+                fontSize="18"
+                horizontalAlign="center" />
+        </brls:Box>
+
+        <!-- No Streams Message -->
+        <brls:Box
+            id="details/no_streams_box"
+            axis="column"
+            grow="1"
+            justifyContent="center"
+            alignItems="center">
+            
+            <brls:Label
+                id="details/no_streams_text"
+                text="No streams were found"
+                fontSize="24"
+                horizontalAlign="center"
+                marginBottom="30" />
+                
+            <brls:Button
+                id="details/btn_addons"
+                text="Install addons" />
+        </brls:Box>
+
+        <!-- Streams List (hidden by default) -->
+        <brls:ScrollingFrame
+            id="details/streams_scroll"
+            width="100%"
+            grow="1"
+            visibility="gone">
+            
+            <brls:Box
+                id="details/streams_list"
+                axis="column"
+                width="100%" />
+                
+        </brls:ScrollingFrame>
+            
+    </brls:Box>
+    
+</brls:Box>

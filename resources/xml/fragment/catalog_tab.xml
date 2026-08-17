@@ -1,0 +1,39 @@
+<brls:Box
+    width="auto"
+    height="auto"
+    axis="row">
+
+    <!-- Categories Sidebar (Left) -->
+    <RecyclingGrid
+        id="catalog/categories_grid"
+        width="270"
+        height="100%"
+        paddingLeft="10"
+        paddingRight="10"
+        paddingTop="20"
+        paddingBottom="8"
+        itemHeight="50"
+        preFetchLine="2"
+        spanCount="1" />
+
+    <!-- Separator -->
+    <brls:Rectangle
+        width="2"
+        height="600"
+        marginBottom="60"
+        marginTop="30"
+        color="#80808080" />
+
+    <!-- Content Grid (Right) -->
+    <RecyclingGrid
+        id="catalog/items_grid"
+        grow="1"
+        paddingLeft="20"
+        paddingRight="20"
+        paddingTop="30"
+        spanCount="4"
+        itemHeight="390"
+        itemSpace="15"
+        preFetchLine="2" />
+
+</brls:Box>

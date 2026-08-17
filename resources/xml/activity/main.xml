@@ -1,0 +1,48 @@
+<brls:AppletFrame
+        iconInterpolation="linear"
+        headerHidden="true"
+        footerHidden="false">
+    <brls:Box
+            axis="column"
+            width="100%"
+            height="100%">
+        <AutoTabFrame
+                id="main/tabFrame"
+                grow="1"
+                tabBackgroundColor="@theme/color/grey_1"
+                tabItemActiveTextColor="@theme/color/tsvitch"
+                disableNavigationDown="true"
+                defaultTab="0"
+                sidebarPosition="left">
+
+            <Tab label=""
+                 fontSize="18"
+                 icon="@res/png/ico-home.png"
+                 iconActivate="@res/png/ico-home-activate.png">
+                <CatalogTab/>
+            </Tab>
+
+        </AutoTabFrame>
+        <brls:Box
+                wireframe="false"
+                width="100"
+                axis="column"
+                justifyContent="center"
+                alignItems="center"
+                positionType="absolute"
+                positionBottom="20">
+
+            <CustomButton
+                    id="main/setting"
+                    focusable="true"
+                    highlightCornerRadius="50"
+                    cornerRadius="50"
+                    wireframe="false">
+                <brls:Image
+                        width="48"
+                        height="48"
+                        image="@res/png/ico-setting.png"/>
+            </CustomButton>
+        </brls:Box>
+    </brls:Box>
+</brls:AppletFrame>

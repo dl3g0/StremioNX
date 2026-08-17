@@ -1,0 +1,46 @@
+# ---- Build output ----
+/build/
+/build_ninja/
+
+# ---- Compiled binaries / artifacts ----
+*.nro
+*.nso
+*.elf
+*.nacp
+*.map
+*.a
+*.o
+*.obj
+*.d
+
+# ---- CMake ----
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeLists.txt.user
+compile_commands.json
+install_manifest.txt
+
+# ---- Logs & temp files ----
+*.log
+*.tmp
+*.swp
+*~
+*.bak
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+
+# ---- OS ----
+Thumbs.db
+.DS_Store
+
+# ---- Misc ----
+/romfs/
+*.suprx
+*.dksh
