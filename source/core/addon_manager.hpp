@@ -27,6 +27,7 @@ struct CatalogDef {
     std::string id;
     std::string name;
     std::string addon_url;
+    bool searchable = false;
 };
 
 struct AddonManifest {
@@ -91,6 +92,20 @@ public:
     // e.g. Cinemeta). The callback fires once with every episode of every
     // season, grouped/ordered as returned by the addon.
     void fetchSeriesMeta(const std::string& id, std::function<void(const std::vector<EpisodeItem>&)> callback);
+
+    // Search movies/series across the installed add-ons using their searchable
+    // catalogs. `type` is "movie", "series" or "all" (both). The callback fires
+    // once with the merged, de-duplicated results.
+    void searchCatalog(const std::string& type, const std::string& query,
+                       std::function<void(const std::vector<MetaItem>&)> callback);
+
+    // Fetches the full metadata for a single item from the canonical meta
+    // endpoint (<base>/meta/<type>/<id>.json, Cinemeta preferred). Search
+    // results only carry a few fields; this enriches them with description,
+    // genre, cast, director, runtime and rating. The callback fires once with
+    // a MetaItem (possibly empty if the fetch failed).
+    void fetchMeta(const std::string& type, const std::string& id,
+                   std::function<void(const MetaItem&)> callback);
 
     void addAddon(const std::string& url);
     void removeAddon(const std::string& url);

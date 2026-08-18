@@ -881,7 +881,19 @@ void Application::notify(const std::string& text)
 void Application::giveFocus(View* view)
 {
     View* oldFocus = Application::currentFocus;
-    View* newFocus = view ? view->getDefaultFocus() : nullptr;
+
+    if (view == nullptr)
+    {
+        if (oldFocus != nullptr)
+        {
+            Application::currentFocus = nullptr;
+            Application::globalFocusChangeEvent.fire(nullptr);
+            Application::globalHintsUpdateEvent.fire();
+        }
+        return;
+    }
+
+    View* newFocus = view->getDefaultFocus();
 
     if (oldFocus != newFocus && newFocus != nullptr)
     {

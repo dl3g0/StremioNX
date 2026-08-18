@@ -13,6 +13,7 @@
 #include "ui/views/hint_label.hpp"
 #include "ui/views/catalog_menu_cell.hpp"
 #include "ui/views/catalog_tab.hpp"
+#include "ui/views/search_tab.hpp"
 #include "ui/theme.hpp"
 
 #ifdef __SWITCH__
@@ -22,6 +23,7 @@
 int main(int argc, char* argv[]) {
 #ifdef __SWITCH__
     FilePaths::ensureDataDir();
+    appletSetAutoSleepDisabled(true);
     freopen(FilePaths::kLogFile, "w", stdout);
     freopen(FilePaths::kLogFile, "w", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -61,6 +63,7 @@ int main(int argc, char* argv[]) {
     brls::Application::registerXMLView("CustomButton", CustomButton::create);
     brls::Application::registerXMLView("HintLabel", HintLabel::create);
     brls::Application::registerXMLView("CatalogTab", CatalogTab::create);
+    brls::Application::registerXMLView("SearchTab", SearchTab::create);
     brls::Application::registerXMLView("CatalogMenuCell", CatalogMenuCell::create);
 
     brls::Logger::info("Pushing MainActivity...");

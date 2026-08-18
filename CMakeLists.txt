@@ -14,8 +14,8 @@ include(${BOREALIS_LIBRARY}/cmake/toolchain.cmake)
 
 project(StremioNX)
 set(VERSION_MAJOR "0")
-set(VERSION_MINOR "0")
-set(VERSION_REVISION "1")
+set(VERSION_MINOR "2")
+set(VERSION_REVISION "0")
 set(PROJECT_AUTHOR "StremioNX")
 set(PACKAGE_NAME com.stremionx.app)
 set(APP_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_REVISION}")
@@ -56,7 +56,7 @@ add_custom_target(${PROJECT_NAME}.nro
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/resources ${BUILD_RESOURCES_DIR}
     COMMAND ${CMAKE_COMMAND} -E remove_directory ${BUILD_RESOURCES_DIR}/font
     COMMAND ${NX_NACPTOOL_EXE} --create ${PROJECT_NAME} ${PROJECT_AUTHOR} ${APP_VERSION} ${PROJECT_NAME}.nacp
-    COMMAND ${NX_ELF2NRO_EXE} ${PROJECT_NAME}.elf ${PROJECT_NAME}.nro --nacp=${PROJECT_NAME}.nacp --romfsdir=${BUILD_RESOURCES_DIR}
+    COMMAND ${NX_ELF2NRO_EXE} ${PROJECT_NAME}.elf ${PROJECT_NAME}.nro --icon=${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg --nacp=${PROJECT_NAME}.nacp --romfsdir=${BUILD_RESOURCES_DIR}
     ALL
 )
 

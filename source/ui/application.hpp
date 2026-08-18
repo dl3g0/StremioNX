@@ -2,6 +2,7 @@
 #include <borealis.hpp>
 #include <vector>
 #include <string>
+#include <memory>
 #include "../core/addon_manager.hpp"
 
 class DetailsActivity : public brls::Activity {
@@ -11,6 +12,17 @@ public:
 
     MetaItem item;
     brls::Box* rootBox;
+
+    // Guards the async callbacks (streams, series meta, background, meta
+    // enrichment). The destructor sets it to false so pending brls::sync
+    // lambdas that captured `this` can bail out instead of touching a freed
+    // activity.
+    std::shared_ptr<bool> alive;
+
+    // Re-applies the current item fields to the title/runtime/year/rating/
+    // summary labels and rebuilds the genre/cast/director pills. Called from
+    // the constructor and again when an enriched meta fetch completes.
+    void applyMetaToViews();
     
     // Currently fetched streams, kept so the "Fuentes" filter can re-render
     // the list without re-fetching.

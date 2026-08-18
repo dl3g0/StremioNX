@@ -688,6 +688,7 @@ void RecyclingGrid::queueReusableCell(RecyclingGridItem* cell) {
             cell->cacheForReuse();
         } else {
             brls::Logger::warning("queueReusableCell: queueMap entry for '{}' is null or missing", cell->reuseIdentifier);
+            cell->freeView();
         }
     } catch (...) {
         brls::Logger::error("queueReusableCell: exception accessing queueMap");

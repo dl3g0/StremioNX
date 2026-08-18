@@ -65,7 +65,7 @@ public:
     }
     
     RecyclingGridItem* cellForRow(RecyclingGrid* recycler, size_t index) override {
-        CatalogCell* cell = dynamic_cast<CatalogCell*>(recycler->getGridItemByIndex(index));
+        CatalogCell* cell = dynamic_cast<CatalogCell*>(recycler->dequeueReusableCell("Cell"));
         if (!cell) {
             cell = new CatalogCell();
         }

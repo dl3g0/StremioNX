@@ -48,47 +48,37 @@ static std::string cleanStreamText(const std::string& text) {
 // DetailsActivity
 
 DetailsActivity::DetailsActivity(const MetaItem& item) : item(item) {
+    alive = std::make_shared<bool>(true);
     rootBox = static_cast<brls::Box*>(brls::View::createFromXMLResource("activity/details.xml"));
     
     // Bind UI elements
     brls::Image* background = dynamic_cast<brls::Image*>(rootBox->getView("details/background"));
-    brls::Label* title = dynamic_cast<brls::Label*>(rootBox->getView("details/title"));
-    brls::Label* runtime = dynamic_cast<brls::Label*>(rootBox->getView("details/runtime"));
-    brls::Label* year = dynamic_cast<brls::Label*>(rootBox->getView("details/year"));
-    brls::Label* rating = dynamic_cast<brls::Label*>(rootBox->getView("details/rating"));
-    brls::Label* summary = dynamic_cast<brls::Label*>(rootBox->getView("details/summary"));
     
-    // Populate simple data
-    if (title) title->setText(item.name);
-    if (runtime) runtime->setText(item.runtime.empty() ? "" : item.runtime);
-    if (year) year->setText(item.year.empty() ? "" : item.year);
-    if (rating) rating->setText(item.imdbRating.empty() ? "" : item.imdbRating + " IMDb");
-    if (summary) summary->setText(item.description);
+    // Populate simple data + pills
+    applyMetaToViews();
     
-    // Populate pills
-    auto createPills = [](brls::Box* container, const std::vector<std::string>& items) {
-        if (!container || items.empty()) return;
-        for (const auto& txt : items) {
-            brls::Box* pill = new brls::Box(brls::Axis::ROW);
-            pill->setCornerRadius(15);
-            pill->setBackgroundColor(brls::Application::getTheme()["color/grey_4"]);
-            pill->setPaddingTop(5); pill->setPaddingBottom(5);
-            pill->setPaddingLeft(15); pill->setPaddingRight(15);
-            pill->setMarginRight(10);
-            pill->setMarginBottom(10);
-            
-            brls::Label* lbl = new brls::Label();
-            lbl->setText(txt);
-            lbl->setFontSize(14);
-            pill->addView(lbl);
-            
-            container->addView(pill);
-        }
-    };
-    
-    createPills(dynamic_cast<brls::Box*>(rootBox->getView("details/genres")), item.genre);
-    createPills(dynamic_cast<brls::Box*>(rootBox->getView("details/cast")), item.cast);
-    createPills(dynamic_cast<brls::Box*>(rootBox->getView("details/directors")), item.director);
+    // Search results from Cinemeta only carry id/type/name/poster/background;
+    // the rest (description, genre, cast, director, runtime, rating) is filled
+    // in from the canonical meta endpoint when missing.
+    if (item.description.empty() || item.genre.empty() || item.cast.empty()) {
+        AddonManager::getInstance().fetchMeta(item.type, item.id, [this, alive = this->alive](const MetaItem& full) {
+            brls::sync([this, alive, full]() {
+                if (!*alive) return;
+                if (full.id.empty() && full.name.empty()) return;
+                if (!full.name.empty()) this->item.name = full.name;
+                if (!full.logo_url.empty()) this->item.logo_url = full.logo_url;
+                if (!full.description.empty()) this->item.description = full.description;
+                if (!full.year.empty()) this->item.year = full.year;
+                if (!full.runtime.empty()) this->item.runtime = full.runtime;
+                if (!full.imdbRating.empty()) this->item.imdbRating = full.imdbRating;
+                if (!full.background_url.empty()) this->item.background_url = full.background_url;
+                if (!full.genre.empty()) this->item.genre = full.genre;
+                if (!full.cast.empty()) this->item.cast = full.cast;
+                if (!full.director.empty()) this->item.director = full.director;
+                this->applyMetaToViews();
+            });
+        });
+    }
     
     // Wire up Addons button
     brls::Button* btnAddons = dynamic_cast<brls::Button*>(rootBox->getView("details/btn_addons"));
@@ -149,8 +139,8 @@ DetailsActivity::DetailsActivity(const MetaItem& item) : item(item) {
                 
                 renderStreamList();
                 
-                brls::delay(200, [this]() {
-                    if (!this->rootBox) return;
+                brls::delay(200, [this, alive = this->alive]() {
+                    if (!*alive) return;
                     brls::View* loader2 = rootBox->getView("details/streams_loader");
                     brls::View* scroll2 = rootBox->getView("details/streams_scroll");
                     brls::View* noStreams = rootBox->getView("details/no_streams_box");
@@ -172,10 +162,11 @@ DetailsActivity::DetailsActivity(const MetaItem& item) : item(item) {
             url = "https:" + url;
         }
         
-        TaskQueue::getInstance().push([background, url]() {
+        TaskQueue::getInstance().push([background, url, alive = this->alive]() {
             std::vector<unsigned char> data;
             if (HttpClient::getInstance().getBinary(url, data) && !data.empty()) {
-                brls::sync([background, data = std::move(data)]() {
+                brls::sync([background, alive, data = std::move(data)]() {
+                    if (!*alive) return;
                     background->setImageFromMem(data.data(), data.size());
                 });
             }
@@ -218,9 +209,9 @@ void DetailsActivity::loadStreams(const std::string& id) {
 
     // Progressive callback: gets called once per addon (loading=true) and a
     // final time when every addon has answered (loading=false).
-    AddonManager::getInstance().fetchStreams(item.type, id, [this](const std::vector<StreamItem>& streams, bool loading) {
-        brls::sync([this, streams, loading]() {
-            if (!this->rootBox) return; // Basic safety
+    AddonManager::getInstance().fetchStreams(item.type, id, [this, alive = this->alive](const std::vector<StreamItem>& streams, bool loading) {
+        brls::sync([this, alive, streams, loading]() {
+            if (!*alive) return;
             
             brls::View* s_loader = rootBox->getView("details/streams_loader");
             brls::View* s_noStreams = rootBox->getView("details/no_streams_box");
@@ -273,9 +264,9 @@ void DetailsActivity::loadSeriesMeta() {
     brls::Label* loaderLbl = dynamic_cast<brls::Label*>(rootBox->getView("details/streams_loader_text"));
     if (loaderLbl) loaderLbl->setText("Cargando capítulos...");
 
-    AddonManager::getInstance().fetchSeriesMeta(item.id, [this](const std::vector<EpisodeItem>& eps) {
-        brls::sync([this, eps]() {
-            if (!this->rootBox) return;
+    AddonManager::getInstance().fetchSeriesMeta(item.id, [this, alive = this->alive](const std::vector<EpisodeItem>& eps) {
+        brls::sync([this, alive, eps]() {
+            if (!*alive) return;
 
             episodes = eps;
 
@@ -484,6 +475,46 @@ void DetailsActivity::renderStreamList() {
 }
 
 DetailsActivity::~DetailsActivity() {
+    *alive = false;
+}
+
+void DetailsActivity::applyMetaToViews() {
+    brls::Label* title = dynamic_cast<brls::Label*>(rootBox->getView("details/title"));
+    brls::Label* runtime = dynamic_cast<brls::Label*>(rootBox->getView("details/runtime"));
+    brls::Label* year = dynamic_cast<brls::Label*>(rootBox->getView("details/year"));
+    brls::Label* rating = dynamic_cast<brls::Label*>(rootBox->getView("details/rating"));
+    brls::Label* summary = dynamic_cast<brls::Label*>(rootBox->getView("details/summary"));
+
+    if (title) title->setText(item.name);
+    if (runtime) runtime->setText(item.runtime.empty() ? "" : item.runtime);
+    if (year) year->setText(item.year.empty() ? "" : item.year);
+    if (rating) rating->setText(item.imdbRating.empty() ? "" : item.imdbRating + " IMDb");
+    if (summary) summary->setText(item.description);
+
+    auto rebuildPills = [this](const char* viewName, const std::vector<std::string>& items) {
+        brls::Box* container = dynamic_cast<brls::Box*>(rootBox->getView(viewName));
+        if (!container) return;
+        container->clearViews();
+        for (const auto& txt : items) {
+            brls::Box* pill = new brls::Box(brls::Axis::ROW);
+            pill->setCornerRadius(15);
+            pill->setBackgroundColor(brls::Application::getTheme()["color/grey_4"]);
+            pill->setPaddingTop(5); pill->setPaddingBottom(5);
+            pill->setPaddingLeft(15); pill->setPaddingRight(15);
+            pill->setMarginRight(10);
+            pill->setMarginBottom(10);
+
+            brls::Label* lbl = new brls::Label();
+            lbl->setText(txt);
+            lbl->setFontSize(14);
+            pill->addView(lbl);
+
+            container->addView(pill);
+        }
+    };
+    rebuildPills("details/genres", item.genre);
+    rebuildPills("details/cast", item.cast);
+    rebuildPills("details/directors", item.director);
 }
 
 brls::View* DetailsActivity::createContentView() {

@@ -8,6 +8,8 @@
 
 #include <fstream>
 #include <atomic>
+#include <cstdio>
+#include <pthread.h>
 #include "task_queue.hpp"
 
 using json = nlohmann::json;
@@ -41,6 +43,34 @@ static std::string sanitizeManifestUrl(std::string url) {
     }
     if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) return "";
     return url;
+}
+
+// Minimal RFC 3986 percent-encoding for search queries (spaces, accents,
+// punctuation...). Unreserved characters are passed through untouched.
+static std::string urlEncode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() * 3);
+    char buf[4];
+    for (unsigned char c : s) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out += (char)c;
+        } else {
+            snprintf(buf, sizeof(buf), "%%%02X", c);
+            out += buf;
+        }
+    }
+    return out;
+}
+
+static std::string jsonStr(const json& obj, const char* key, const std::string& def = "") {
+    if (obj.contains(key) && obj[key].is_string()) return obj[key].get<std::string>();
+    return def;
+}
+
+static int jsonInt(const json& obj, const char* key, int def) {
+    if (obj.contains(key) && obj[key].is_number_integer()) return obj[key].get<int>();
+    return def;
 }
 
 AddonManager& AddonManager::getInstance() {
@@ -277,20 +307,29 @@ bool AddonManager::fetchManifest() {
                 
                 AddonManifest manifest;
                 manifest.url = clean;
-                manifest.id = j.value("id", "");
-                manifest.name = j.value("name", "Unknown Addon");
-                manifest.version = j.value("version", "1.0.0");
-                manifest.description = j.value("description", "");
-                manifest.logo = j.value("logo", "");
+                manifest.id = jsonStr(j, "id");
+                manifest.name = jsonStr(j, "name", "Unknown Addon");
+                manifest.version = jsonStr(j, "version", "1.0.0");
+                manifest.description = jsonStr(j, "description");
+                manifest.logo = jsonStr(j, "logo");
                 
                 new_manifests.push_back(manifest);
                 
                 for (auto& cat : j["catalogs"]) {
                     CatalogDef def;
-                    def.type = cat.value("type", "");
-                    def.id = cat.value("id", "");
-                    def.name = cat.value("name", "");
+                    def.type = jsonStr(cat, "type");
+                    def.id = jsonStr(cat, "id");
+                    def.name = jsonStr(cat, "name");
                     def.addon_url = base_url;
+                    def.searchable = false;
+                    if (cat.contains("extra") && cat["extra"].is_array()) {
+                        for (auto& e : cat["extra"]) {
+                            if (e.is_object() && jsonStr(e, "name") == "search") {
+                                def.searchable = true;
+                                break;
+                            }
+                        }
+                    }
                     
                     std::string key = def.type + ":" + def.id;
                     
@@ -428,17 +467,17 @@ bool AddonManager::fetchCurrentCatalog(bool append) {
             }
             for (auto& meta : j["metas"]) {
                 MetaItem item;
-                item.id = meta.value("id", "");
-                item.type = meta.value("type", "");
-                item.name = meta.value("name", "");
-                item.poster_url = meta.value("poster", "");
-                item.logo_url = meta.value("logo", "");
-                item.description = meta.value("description", "");
+                item.id = jsonStr(meta, "id");
+                item.type = jsonStr(meta, "type");
+                item.name = jsonStr(meta, "name");
+                item.poster_url = jsonStr(meta, "poster");
+                item.logo_url = jsonStr(meta, "logo");
+                item.description = jsonStr(meta, "description");
                 
-                item.year = meta.value("year", "");
-                item.runtime = meta.value("runtime", "");
-                item.imdbRating = meta.value("imdbRating", "");
-                item.background_url = meta.value("background", "");
+                item.year = jsonStr(meta, "year");
+                item.runtime = jsonStr(meta, "runtime");
+                item.imdbRating = jsonStr(meta, "imdbRating");
+                item.background_url = jsonStr(meta, "background");
                 
                 if (meta.contains("genre") && meta["genre"].is_array()) {
                     for (auto& g : meta["genre"]) item.genre.push_back(g.get<std::string>());
@@ -479,8 +518,13 @@ void AddonManager::fetchStreams(const std::string& type, const std::string& id, 
 
     auto results = std::make_shared<std::vector<StreamItem>>();
     auto results_mutex = std::make_shared<std::mutex>();
-    auto remaining = std::make_shared<std::atomic<int>>(addons_copy.size());
-    
+    auto remaining = std::make_shared<std::atomic<int>>((int)addons_copy.size());
+
+    auto finish = [results, remaining, callback]() {
+        if (--(*remaining) != 0) return;
+        if (callback) callback(*results, false);
+    };
+
     for (const auto& addon : addons_copy) {
         std::string stream_url = addon;
         size_t pos = stream_url.find("manifest.json");
@@ -489,20 +533,39 @@ void AddonManager::fetchStreams(const std::string& type, const std::string& id, 
         } else {
             stream_url = stream_url + "/stream/" + type + "/" + id + ".json";
         }
-        
-        TaskQueue::getInstance().push([stream_url, addon, results, results_mutex, remaining, callback]() {
+
+        // Each fetch runs on its own 2MB-stack thread: the default TaskQueue
+        // worker stack is too small for nlohmann::json::parse on the large
+        // stream responses (crash after a couple of details screens).
+        struct ThreadData {
+            std::string url;
+            std::string addon;
+            std::shared_ptr<std::vector<StreamItem>> results;
+            std::shared_ptr<std::mutex> results_mutex;
+            std::function<void()> finish;
+            std::function<void(const std::vector<StreamItem>&, bool)> callback;
+        };
+        ThreadData* data = new ThreadData{stream_url, addon, results, results_mutex, finish, callback};
+
+        pthread_t thread;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+
+        auto threadFunc = [](void* arg) -> void* {
+            ThreadData* d = static_cast<ThreadData*>(arg);
             std::string response;
-            if (HttpClient::getInstance().get(stream_url, response)) {
+            if (HttpClient::getInstance().get(d->url, response)) {
                 try {
                     json j = json::parse(response);
                     if (j.contains("streams") && j["streams"].is_array()) {
                         std::vector<StreamItem> temp;
                         for (auto& s : j["streams"]) {
                             StreamItem item;
-                            item.name = s.value("name", "");
-                            item.title = s.value("title", "");
-                            item.description = s.value("description", "");
-                            item.url = s.value("url", "");
+                            item.name = jsonStr(s, "name");
+                            item.title = jsonStr(s, "title");
+                            item.description = jsonStr(s, "description");
+                            item.url = jsonStr(s, "url");
                             // Prefer the explicit behaviorHints.cached flag when the
                             // addon provides it (Torrentio/MediaFusion/StremThru do).
                             // Otherwise fall back to the lightning bolt (U+26A1,
@@ -517,48 +580,51 @@ void AddonManager::fetchStreams(const std::string& type, const std::string& id, 
                             }
                             item.cached = cached;
                             LOG("[Network] stream cached=" + std::string(cached ? "true" : "false") + " hint=" + std::string(hasBehaviorHint ? "yes" : "no") + " name=" + item.name);
-                            item.infoHash = s.value("infoHash", "");
+                            item.infoHash = jsonStr(s, "infoHash");
                             if (s.contains("fileIdx")) {
                                 if (s["fileIdx"].is_number()) item.fileIdx = std::to_string(s["fileIdx"].get<int>());
                                 else if (s["fileIdx"].is_string()) item.fileIdx = s["fileIdx"].get<std::string>();
                             }
-                            item.ytId = s.value("ytId", "");
-                            item.externalUrl = s.value("externalUrl", "");
-                            item.addonName = addon; 
+                            item.ytId = jsonStr(s, "ytId");
+                            item.externalUrl = jsonStr(s, "externalUrl");
+                            item.addonName = d->addon;
                             if (isResolutionOver1080p(item.name, item.title)) {
-                                LOG("[Network] Skipping stream >1080p from " + addon + ": " + item.name);
+                                LOG("[Network] Skipping stream >1080p from " + d->addon + ": " + item.name);
                                 continue;
                             }
                             temp.push_back(item);
                         }
-                        
-                        std::lock_guard<std::mutex> lock(*results_mutex);
+
+                        std::lock_guard<std::mutex> lock(*d->results_mutex);
                         for (auto& it : temp) {
                             bool dup = false;
-                            for (auto& existing : *results) {
+                            for (auto& existing : *d->results) {
                                 if (existing.url == it.url && existing.name == it.name) {
                                     dup = true;
                                     break;
                                 }
                             }
                             if (!dup)
-                                results->push_back(it);
+                                d->results->push_back(it);
                         }
                         // Report progress after each addon so the sidebar fills
                         // up as results arrive instead of staying blank while
                         // the slowest addon is still loading.
-                        if (callback) callback(*results, true);
+                        if (d->callback) d->callback(*d->results, true);
                     }
                 } catch (...) {
-                    LOG("[Network] ERROR parsing streams from: " + stream_url);
+                    LOG("[Network] ERROR parsing streams from: " + d->url);
                 }
             }
-            
-            int count = --(*remaining);
-            if (count == 0) {
-                if (callback) callback(*results, false);
-            }
-        });
+
+            d->finish();
+            delete d;
+            return nullptr;
+        };
+
+        pthread_create(&thread, &attr, threadFunc, data);
+        pthread_detach(thread);
+        pthread_attr_destroy(&attr);
     }
 }
 
@@ -576,7 +642,12 @@ void AddonManager::fetchSeriesMeta(const std::string& id, std::function<void(con
 
     auto results = std::make_shared<std::vector<EpisodeItem>>();
     auto results_mutex = std::make_shared<std::mutex>();
-    auto remaining = std::make_shared<std::atomic<int>>(addons_copy.size());
+    auto remaining = std::make_shared<std::atomic<int>>((int)addons_copy.size());
+
+    auto finish = [results, remaining, callback]() {
+        if (--(*remaining) != 0) return;
+        if (callback) callback(*results);
+    };
 
     for (const auto& addon : addons_copy) {
         std::string meta_url = addon;
@@ -587,50 +658,310 @@ void AddonManager::fetchSeriesMeta(const std::string& id, std::function<void(con
             meta_url = meta_url + "/meta/series/" + id + ".json";
         }
 
-        TaskQueue::getInstance().push([meta_url, addon, results, results_mutex, remaining, callback]() {
+        // Same 2MB-stack rationale as fetchStreams(): large meta responses
+        // overflow the TaskQueue worker stack during json::parse.
+        struct ThreadData {
+            std::string url;
+            std::string addon;
+            std::shared_ptr<std::vector<EpisodeItem>> results;
+            std::shared_ptr<std::mutex> results_mutex;
+            std::function<void()> finish;
+            std::function<void(const std::vector<EpisodeItem>&)> callback;
+        };
+        ThreadData* data = new ThreadData{meta_url, addon, results, results_mutex, finish, callback};
+
+        pthread_t thread;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+
+        auto threadFunc = [](void* arg) -> void* {
+            ThreadData* d = static_cast<ThreadData*>(arg);
             std::string response;
-            if (HttpClient::getInstance().get(meta_url, response)) {
+            if (HttpClient::getInstance().get(d->url, response)) {
                 try {
                     json j = json::parse(response);
                     if (j.contains("meta") && j["meta"].is_object() && j["meta"].contains("videos") && j["meta"]["videos"].is_array()) {
                         std::vector<EpisodeItem> temp;
                         for (auto& v : j["meta"]["videos"]) {
                             EpisodeItem ep;
-                            ep.id = v.value("id", "");
-                            ep.name = v.value("name", "");
-                            ep.season = v.value("season", 1);
-                            ep.episode = v.value("episode", 1);
-                            ep.overview = v.value("overview", "");
+                            ep.id = jsonStr(v, "id");
+                            ep.name = jsonStr(v, "name");
+                            ep.season = jsonInt(v, "season", 1);
+                            ep.episode = jsonInt(v, "episode", 1);
+                            ep.overview = jsonStr(v, "overview");
                             if (!ep.id.empty())
                                 temp.push_back(ep);
                         }
 
                         if (!temp.empty()) {
-                            LOG("[Network] Series meta episodes from " + addon + ": " + std::to_string(temp.size()));
-                            std::lock_guard<std::mutex> lock(*results_mutex);
+                            LOG("[Network] Series meta episodes from " + d->addon + ": " + std::to_string(temp.size()));
+                            std::lock_guard<std::mutex> lock(*d->results_mutex);
                             for (auto& it : temp) {
                                 bool dup = false;
-                                for (auto& existing : *results) {
+                                for (auto& existing : *d->results) {
                                     if (existing.id == it.id) {
                                         dup = true;
                                         break;
                                     }
                                 }
                                 if (!dup)
-                                    results->push_back(it);
+                                    d->results->push_back(it);
                             }
                         }
                     }
                 } catch (...) {
-                    LOG("[Network] ERROR parsing series meta from: " + meta_url);
+                    LOG("[Network] ERROR parsing series meta from: " + d->url);
                 }
             }
 
-            int count = --(*remaining);
-            if (count == 0) {
-                if (callback) callback(*results);
+            d->finish();
+            delete d;
+            return nullptr;
+        };
+
+        pthread_create(&thread, &attr, threadFunc, data);
+        pthread_detach(thread);
+        pthread_attr_destroy(&attr);
+    }
+}
+
+void AddonManager::fetchMeta(const std::string& type, const std::string& id,
+                             std::function<void(const MetaItem&)> callback) {
+    std::string base;
+    {
+        std::lock_guard<std::mutex> alock(addons_mutex);
+        // Prefer Cinemeta (the canonical metadata provider) when installed.
+        for (const auto& a : installed_addons) {
+            if (a.find("cinemeta") != std::string::npos) {
+                base = a;
+                break;
             }
-        });
+        }
+        if (base.empty() && !installed_addons.empty()) base = installed_addons[0];
+    }
+    if (base.empty()) {
+        if (callback) callback(MetaItem{});
+        return;
+    }
+
+    std::string meta_url = base;
+    size_t pos = meta_url.find("manifest.json");
+    if (pos != std::string::npos) {
+        meta_url = meta_url.substr(0, pos) + "meta/" + type + "/" + id + ".json";
+    } else {
+        meta_url = meta_url + "/meta/" + type + "/" + id + ".json";
+    }
+
+    // 2MB-stack thread: same rationale as fetchStreams()/searchCatalog().
+    struct ThreadData {
+        std::string url;
+        std::function<void(const MetaItem&)> callback;
+    };
+    ThreadData* data = new ThreadData{meta_url, callback};
+
+    pthread_t thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+
+    auto threadFunc = [](void* arg) -> void* {
+        ThreadData* d = static_cast<ThreadData*>(arg);
+        MetaItem item;
+        std::string response;
+        if (HttpClient::getInstance().get(d->url, response)) {
+            try {
+                json j = json::parse(response);
+                if (j.contains("meta") && j["meta"].is_object()) {
+                    auto& meta = j["meta"];
+                    item.id = jsonStr(meta, "id");
+                    item.type = jsonStr(meta, "type");
+                    item.name = jsonStr(meta, "name");
+                    item.poster_url = jsonStr(meta, "poster");
+                    item.logo_url = jsonStr(meta, "logo");
+                    item.description = jsonStr(meta, "description");
+                    item.year = jsonStr(meta, "year");
+                    item.runtime = jsonStr(meta, "runtime");
+                    item.imdbRating = jsonStr(meta, "imdbRating");
+                    item.background_url = jsonStr(meta, "background");
+                    if (meta.contains("genre") && meta["genre"].is_array()) {
+                        for (auto& g : meta["genre"]) item.genre.push_back(g.get<std::string>());
+                    }
+                    if (meta.contains("cast") && meta["cast"].is_array()) {
+                        for (auto& c : meta["cast"]) item.cast.push_back(c.get<std::string>());
+                    }
+                    if (meta.contains("director") && meta["director"].is_array()) {
+                        for (auto& d : meta["director"]) item.director.push_back(d.get<std::string>());
+                    }
+                }
+            } catch (...) {
+                LOG("[Network] ERROR parsing meta from: " + d->url);
+            }
+        }
+        if (d->callback) d->callback(item);
+        delete d;
+        return nullptr;
+    };
+
+    pthread_create(&thread, &attr, threadFunc, data);
+    pthread_detach(thread);
+    pthread_attr_destroy(&attr);
+}
+
+void AddonManager::searchCatalog(const std::string& type, const std::string& query,
+                                 std::function<void(const std::vector<MetaItem>&)> callback) {
+    std::vector<std::string> types;
+    if (type == "all" || type.empty()) {
+        types = {"movie", "series"};
+    } else {
+        types = {type};
+    }
+
+    if (query.empty()) {
+        if (callback) callback({});
+        return;
+    }
+
+    // Collect one search endpoint per addon+type, preferring the catalogs that
+    // declare a searchable `extra` (Stremio convention). Add-ons without one
+    // fall back to the pseudo "search" catalog id.
+    struct Endpoint {
+        std::string base;
+        std::string id;
+        std::string type;
+    };
+    std::vector<Endpoint> endpoints;
+
+    {
+        std::lock_guard<std::mutex> lock(catalog_mutex);
+        for (const auto& t : types) {
+            for (const auto& cat : all_catalogs) {
+                if (cat.type != t) continue;
+                bool searchable = cat.searchable || cat.id == "search";
+                if (!searchable) continue;
+                bool dup = false;
+                for (const auto& e : endpoints) {
+                    if (e.base == cat.addon_url && e.type == t) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) endpoints.push_back({cat.addon_url, cat.id, t});
+            }
+        }
+    }
+
+    if (endpoints.empty()) {
+        std::vector<std::string> addons;
+        {
+            std::lock_guard<std::mutex> alock(addons_mutex);
+            addons = installed_addons;
+        }
+        for (const auto& a : addons) {
+            std::string base = a;
+            size_t pos = base.find("manifest.json");
+            if (pos != std::string::npos) base = base.substr(0, pos);
+            for (const auto& t : types) endpoints.push_back({base, "search", t});
+        }
+    }
+
+    if (endpoints.empty()) {
+        if (callback) callback({});
+        return;
+    }
+
+    auto results = std::make_shared<std::vector<MetaItem>>();
+    auto results_mutex = std::make_shared<std::mutex>();
+    auto remaining = std::make_shared<std::atomic<int>>((int)endpoints.size());
+    // Ensure the callback fires exactly once, even if an endpoint never replies.
+    auto fired = std::make_shared<std::atomic<bool>>(false);
+    std::string encoded = urlEncode(query);
+
+    auto finish = [results, remaining, fired, callback]() {
+        if (--(*remaining) != 0) return;
+        bool expected = false;
+        if (fired->compare_exchange_strong(expected, true)) {
+            if (callback) callback(*results);
+        }
+    };
+
+    for (const auto& ep : endpoints) {
+        std::string url = ep.base + "catalog/" + ep.type + "/" + ep.id + "/search=" + encoded + ".json";
+
+        // Each fetch runs on its own 2MB-stack thread: the default TaskQueue
+        // worker stack is too small for nlohmann::json::parse on some
+        // responses and crashed the applet right after the request finished.
+        struct ThreadData {
+            std::string url;
+            std::shared_ptr<std::vector<MetaItem>> results;
+            std::shared_ptr<std::mutex> results_mutex;
+            std::function<void()> finish;
+        };
+        ThreadData* data = new ThreadData{url, results, results_mutex, finish};
+
+        pthread_t thread;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+
+        auto threadFunc = [](void* arg) -> void* {
+            ThreadData* d = static_cast<ThreadData*>(arg);
+            std::string response;
+            if (HttpClient::getInstance().get(d->url, response)) {
+                try {
+                    json j = json::parse(response);
+                    if (j.contains("metas") && j["metas"].is_array()) {
+                        std::vector<MetaItem> temp;
+                        for (auto& meta : j["metas"]) {
+                            MetaItem item;
+                            item.id = jsonStr(meta, "id");
+                            item.type = jsonStr(meta, "type");
+                            item.name = jsonStr(meta, "name");
+                            item.poster_url = jsonStr(meta, "poster");
+                            item.logo_url = jsonStr(meta, "logo");
+                            item.description = jsonStr(meta, "description");
+                            item.year = jsonStr(meta, "year");
+                            item.runtime = jsonStr(meta, "runtime");
+                            item.imdbRating = jsonStr(meta, "imdbRating");
+                            item.background_url = jsonStr(meta, "background");
+
+                            if (meta.contains("genre") && meta["genre"].is_array()) {
+                                for (auto& g : meta["genre"]) item.genre.push_back(g.get<std::string>());
+                            }
+                            if (meta.contains("cast") && meta["cast"].is_array()) {
+                                for (auto& c : meta["cast"]) item.cast.push_back(c.get<std::string>());
+                            }
+                            if (meta.contains("director") && meta["director"].is_array()) {
+                                for (auto& d : meta["director"]) item.director.push_back(d.get<std::string>());
+                            }
+
+                            temp.push_back(item);
+                        }
+
+                        std::lock_guard<std::mutex> lock(*d->results_mutex);
+                        for (auto& it : temp) {
+                            bool dup = false;
+                            for (auto& existing : *d->results) {
+                                if (existing.id == it.id) {
+                                    dup = true;
+                                    break;
+                                }
+                            }
+                            if (!dup) d->results->push_back(it);
+                        }
+                    }
+                } catch (...) {
+                    LOG("[Network] ERROR parsing search results from: " + d->url);
+                }
+            }
+            d->finish();
+            delete d;
+            return nullptr;
+        };
+
+        pthread_create(&thread, &attr, threadFunc, data);
+        pthread_detach(thread);
+        pthread_attr_destroy(&attr);
     }
 }
 

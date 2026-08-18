@@ -55,8 +55,19 @@ brls::View* SettingsActivity::createAboutTab() {
     brls::Box* container = new brls::Box(brls::Axis::COLUMN);
     container->setPadding(50, 50, 50, 50);
 
+    brls::Box* logoRow = new brls::Box(brls::Axis::ROW);
+    logoRow->setAlignItems(brls::AlignItems::CENTER);
+    logoRow->setJustifyContent(brls::JustifyContent::CENTER);
+    logoRow->setMarginBottom(20);
+    brls::Image* logo = new brls::Image();
+    logo->setImageFromRes("img/icon.png");
+    logo->setWidth(120);
+    logo->setHeight(120);
+    logoRow->addView(logo);
+    container->addView(logoRow);
+
     brls::Label* title = new brls::Label();
-    title->setText("StremioNX v0.1");
+    title->setText("StremioNX v0.2");
     title->setFontSize(40);
     title->setMarginBottom(30);
     container->addView(title);
@@ -208,6 +219,7 @@ brls::View* SettingsActivity::createAddonsTab() {
         }
         
         scroll->setContentView(container);
+        brls::Application::giveFocus(scroll);
     };
     
     (*rebuild)();
@@ -300,6 +312,7 @@ brls::View* SettingsActivity::createCatalogManagerTab() {
         }
         
         scroll->setContentView(container);
+        brls::Application::giveFocus(scroll);
     };
     
     (*rebuild)();
