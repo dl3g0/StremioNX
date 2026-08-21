@@ -14,32 +14,27 @@
 
 using json = nlohmann::json;
 
-// The Switch's GPU tops out at 1080p; drop any stream that advertises a
-// higher resolution so the applet never tries to decode 4K/8K.
-static bool isResolutionOver1080p(const std::string& name, const std::string& title) {
-    std::string hay = name + " " + title;
-    std::transform(hay.begin(), hay.end(), hay.begin(), ::tolower);
-    // Token list covers the common markers used by Torrentio/MediaFusion/
-    // StremThru/Progreso Latino ("4K", "2160p", "8K", "4320p", "UHD", "3840").
-    static const char* tokens[] = {"2160", "4320", "8k", "4k", "uhd", "3840", "7680"};
-    for (const char* tok : tokens) {
-        if (hay.find(tok) != std::string::npos)
-            return true;
-    }
-    return false;
-}
-
 // Normalizes a manifest URL. Returns an empty string if the URL is unusable.
 // Some browsers append HTML/binary junk to the form value, so we cut at
 // "manifest.json" and only accept well-formed http(s) URLs.
 static std::string sanitizeManifestUrl(std::string url) {
     if (url.empty()) return "";
-    size_t mj = url.find("manifest.json");
+    // Normalize stremio:// to https://
+    if (url.rfind("stremio://", 0) == 0) {
+        url = "https://" + url.substr(10);
+    }
+    // Trim whitespace and special characters
+    size_t start = url.find_first_not_of(" \t\r\n<\"'");
+    if (start != std::string::npos) url = url.substr(start);
+    size_t end = url.find_last_not_of(" \t\r\n>\"'");
+    if (end != std::string::npos) url = url.substr(0, end + 1);
+
+    size_t mj = url.rfind("manifest.json");
     if (mj != std::string::npos) {
         url = url.substr(0, mj) + "manifest.json";
     } else {
-        size_t sp = url.find_first_of(" \t\r\n<\"");
-        if (sp != std::string::npos) url = url.substr(0, sp);
+        if (!url.empty() && url.back() != '/') url += "/";
+        url += "manifest.json";
     }
     if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) return "";
     return url;
@@ -104,16 +99,84 @@ void AddonManager::addAddon(const std::string& url) {
 }
 
 void AddonManager::removeAddon(const std::string& url) {
+    removeAddons(std::vector<std::string>{url});
+}
+
+void AddonManager::removeAddons(const std::vector<std::string>& urls) {
+    if (urls.empty()) return;
+
+    std::vector<std::string> toRemove;
     {
         std::lock_guard<std::mutex> lock(addons_mutex);
-        auto it = std::find(installed_addons.begin(), installed_addons.end(), url);
-        if (it != installed_addons.end()) {
-            installed_addons.erase(it);
-            saveAddons();
+        for (const auto& url : urls) {
+            auto it = std::find(installed_addons.begin(), installed_addons.end(), url);
+            if (it != installed_addons.end()) {
+                installed_addons.erase(it);
+                toRemove.push_back(url);
+            }
+        }
+        if (!toRemove.empty()) saveAddons();
+    }
+    if (toRemove.empty()) return;
+
+    // Base URLs (without "manifest.json") used to match catalogs.
+    std::vector<std::string> base_urls;
+    for (const auto& url : toRemove) {
+        std::string base_url = url;
+        size_t pos = base_url.find("manifest.json");
+        if (pos != std::string::npos) {
+            base_url = base_url.substr(0, pos);
+        }
+        base_urls.push_back(base_url);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(addons_mutex);
+        installed_manifests.erase(
+            std::remove_if(installed_manifests.begin(), installed_manifests.end(),
+                           [&](const AddonManifest& m) {
+                               return std::find(toRemove.begin(), toRemove.end(), m.url) != toRemove.end();
+                           }),
+            installed_manifests.end());
+    }
+    {
+        std::lock_guard<std::mutex> lock(catalog_mutex);
+        auto fromRemovedAddon = [&](const CatalogDef& c) {
+            return std::find(base_urls.begin(), base_urls.end(), c.addon_url) != base_urls.end();
+        };
+        available_catalogs.erase(
+            std::remove_if(available_catalogs.begin(), available_catalogs.end(), fromRemovedAddon),
+            available_catalogs.end());
+        all_catalogs.erase(
+            std::remove_if(all_catalogs.begin(), all_catalogs.end(), fromRemovedAddon),
+            all_catalogs.end());
+        if (std::find(base_urls.begin(), base_urls.end(), active_addon_url) != base_urls.end()) {
+            active_addon_url.clear();
         }
     }
-    fetchManifest(); // Refresh outside lock
+
     notifyCatalogsChanged();
+}
+
+int AddonManager::installAddons(const std::vector<std::string>& urls) {
+    int added = 0;
+    {
+        std::lock_guard<std::mutex> lock(addons_mutex);
+        for (const auto& url : urls) {
+            std::string clean = sanitizeManifestUrl(url);
+            if (clean.empty()) continue;
+            if (std::find(installed_addons.begin(), installed_addons.end(), clean) == installed_addons.end()) {
+                installed_addons.push_back(clean);
+                added++;
+            }
+        }
+        if (added > 0) saveAddons();
+    }
+    if (added > 0) {
+        fetchManifest();
+        notifyCatalogsChanged();
+    }
+    return added;
 }
 
 void AddonManager::loadAddons() {
@@ -236,6 +299,11 @@ void AddonManager::reorderCatalogs() {
     // lists without re-fetching manifests from the network.
     {
         std::lock_guard<std::mutex> lock(catalog_mutex);
+        std::vector<std::string> order_copy;
+        {
+            std::lock_guard<std::mutex> plock(prefs_mutex);
+            order_copy = catalog_order;
+        }
         
         // Rebuild available (visible) list from all_catalogs respecting hidden set.
         available_catalogs.clear();
@@ -247,15 +315,14 @@ void AddonManager::reorderCatalogs() {
         }
         
         // Sort both lists by catalog_order.
-        auto sortFunc = [this](const CatalogDef& a, const CatalogDef& b) {
+        auto sortFunc = [&order_copy](const CatalogDef& a, const CatalogDef& b) {
             std::string keyA = a.type + ":" + a.id;
             std::string keyB = b.type + ":" + b.id;
             
-            std::lock_guard<std::mutex> lock(prefs_mutex);
-            auto itA = std::find(catalog_order.begin(), catalog_order.end(), keyA);
-            auto itB = std::find(catalog_order.begin(), catalog_order.end(), keyB);
+            auto itA = std::find(order_copy.begin(), order_copy.end(), keyA);
+            auto itB = std::find(order_copy.begin(), order_copy.end(), keyB);
             
-            return std::distance(catalog_order.begin(), itA) < std::distance(catalog_order.begin(), itB);
+            return std::distance(order_copy.begin(), itA) < std::distance(order_copy.begin(), itB);
         };
         
         std::sort(available_catalogs.begin(), available_catalogs.end(), sortFunc);
@@ -266,6 +333,12 @@ void AddonManager::reorderCatalogs() {
 }
 
 bool AddonManager::fetchManifest() {
+    // Serialize manifest refreshes: addAddon/removeAddon run it synchronously
+    // on the UI thread while background reload threads (catalog tab) may run
+    // it at the same time; concurrent curl calls exhausted the applet heap
+    // and crashed inside curl.
+    std::lock_guard<std::mutex> fetchLock(fetch_mutex);
+    
     std::vector<std::string> addons_copy;
     {
         std::lock_guard<std::mutex> alock(addons_mutex);
@@ -527,11 +600,12 @@ void AddonManager::fetchStreams(const std::string& type, const std::string& id, 
 
     for (const auto& addon : addons_copy) {
         std::string stream_url = addon;
-        size_t pos = stream_url.find("manifest.json");
+        size_t pos = stream_url.rfind("manifest.json");
         if (pos != std::string::npos) {
             stream_url = stream_url.substr(0, pos) + "stream/" + type + "/" + id + ".json";
         } else {
-            stream_url = stream_url + "/stream/" + type + "/" + id + ".json";
+            if (!stream_url.empty() && stream_url.back() != '/') stream_url += "/";
+            stream_url = stream_url + "stream/" + type + "/" + id + ".json";
         }
 
         // Each fetch runs on its own 2MB-stack thread: the default TaskQueue
@@ -579,7 +653,6 @@ void AddonManager::fetchStreams(const std::string& type, const std::string& id, 
                                 cached = item.name.find("\xE2\x9A\xA1") != std::string::npos;
                             }
                             item.cached = cached;
-                            LOG("[Network] stream cached=" + std::string(cached ? "true" : "false") + " hint=" + std::string(hasBehaviorHint ? "yes" : "no") + " name=" + item.name);
                             item.infoHash = jsonStr(s, "infoHash");
                             if (s.contains("fileIdx")) {
                                 if (s["fileIdx"].is_number()) item.fileIdx = std::to_string(s["fileIdx"].get<int>());
@@ -588,18 +661,29 @@ void AddonManager::fetchStreams(const std::string& type, const std::string& id, 
                             item.ytId = jsonStr(s, "ytId");
                             item.externalUrl = jsonStr(s, "externalUrl");
                             item.addonName = d->addon;
-                            if (isResolutionOver1080p(item.name, item.title)) {
-                                LOG("[Network] Skipping stream >1080p from " + d->addon + ": " + item.name);
-                                continue;
+                            if (s.contains("sources") && s["sources"].is_array()) {
+                                for (const auto& src : s["sources"]) {
+                                    if (src.is_string()) {
+                                        item.sources.push_back(src.get<std::string>());
+                                    }
+                                }
                             }
                             temp.push_back(item);
                         }
 
+                        LOG("[Network] fetchStreams parsed " + std::to_string(temp.size()) + " streams from: " + d->url);
+
                         std::lock_guard<std::mutex> lock(*d->results_mutex);
                         for (auto& it : temp) {
+                            std::string key = it.url.empty() ? it.infoHash : it.url;
+                            if (key.empty()) {
+                                d->results->push_back(it);
+                                continue;
+                            }
                             bool dup = false;
                             for (auto& existing : *d->results) {
-                                if (existing.url == it.url && existing.name == it.name) {
+                                std::string ekey = existing.url.empty() ? existing.infoHash : existing.url;
+                                if (!ekey.empty() && ekey == key) {
                                     dup = true;
                                     break;
                                 }
@@ -615,8 +699,104 @@ void AddonManager::fetchStreams(const std::string& type, const std::string& id, 
                 } catch (...) {
                     LOG("[Network] ERROR parsing streams from: " + d->url);
                 }
+            } else {
+                LOG("[Network] fetchStreams GET request failed for: " + d->url);
             }
 
+            d->finish();
+            delete d;
+            return nullptr;
+        };
+
+        pthread_create(&thread, &attr, threadFunc, data);
+        pthread_detach(thread);
+        pthread_attr_destroy(&attr);
+    }
+}
+
+void AddonManager::fetchSubtitles(const std::string& type, const std::string& id, std::function<void(const std::vector<SubtitleItem>&)> callback) {
+    std::vector<std::string> addons_copy;
+    {
+        std::lock_guard<std::mutex> alock(addons_mutex);
+        addons_copy = installed_addons;
+    }
+
+    if (addons_copy.empty()) {
+        if (callback) callback({});
+        return;
+    }
+
+    auto results = std::make_shared<std::vector<SubtitleItem>>();
+    auto results_mutex = std::make_shared<std::mutex>();
+    auto remaining = std::make_shared<std::atomic<int>>((int)addons_copy.size());
+
+    auto finish = [results, remaining, callback]() {
+        if (--(*remaining) != 0) return;
+        if (callback) callback(*results);
+    };
+
+    for (const auto& addon : addons_copy) {
+        std::string sub_url = addon;
+        size_t pos = sub_url.find("manifest.json");
+        if (pos != std::string::npos) {
+            sub_url = sub_url.substr(0, pos) + "subtitles/" + type + "/" + id + ".json";
+        } else {
+            sub_url = sub_url + "/subtitles/" + type + "/" + id + ".json";
+        }
+
+        // Same 2MB-stack rationale as fetchStreams(): the JSON parse on the
+        // subtitle responses can overflow the small TaskQueue worker stack.
+        struct ThreadData {
+            std::string url;
+            std::string addon;
+            std::shared_ptr<std::vector<SubtitleItem>> results;
+            std::shared_ptr<std::mutex> results_mutex;
+            std::function<void()> finish;
+        };
+        ThreadData* data = new ThreadData{sub_url, addon, results, results_mutex, finish};
+
+        pthread_t thread;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+
+        auto threadFunc = [](void* arg) -> void* {
+            ThreadData* d = static_cast<ThreadData*>(arg);
+            std::string response;
+            if (HttpClient::getInstance().get(d->url, response)) {
+                try {
+                    json j = json::parse(response);
+                    if (j.contains("subtitles") && j["subtitles"].is_array()) {
+                        std::vector<SubtitleItem> temp;
+                        for (auto& s : j["subtitles"]) {
+                            SubtitleItem item;
+                            item.id = jsonStr(s, "id");
+                            item.url = jsonStr(s, "url");
+                            item.lang = jsonStr(s, "lang");
+                            item.name = jsonStr(s, "name");
+                            item.encoding = jsonStr(s, "encoding");
+                            item.addonName = d->addon;
+                            if (item.url.empty()) continue;
+                            temp.push_back(item);
+                        }
+
+                        std::lock_guard<std::mutex> lock(*d->results_mutex);
+                        for (auto& it : temp) {
+                            bool dup = false;
+                            for (auto& existing : *d->results) {
+                                if (existing.url == it.url) {
+                                    dup = true;
+                                    break;
+                                }
+                            }
+                            if (!dup)
+                                d->results->push_back(it);
+                        }
+                    }
+                } catch (...) {
+                    LOG("[Network] ERROR parsing subtitles from: " + d->url);
+                }
+            }
             d->finish();
             delete d;
             return nullptr;
@@ -651,11 +831,12 @@ void AddonManager::fetchSeriesMeta(const std::string& id, std::function<void(con
 
     for (const auto& addon : addons_copy) {
         std::string meta_url = addon;
-        size_t pos = meta_url.find("manifest.json");
+        size_t pos = meta_url.rfind("manifest.json");
         if (pos != std::string::npos) {
             meta_url = meta_url.substr(0, pos) + "meta/series/" + id + ".json";
         } else {
-            meta_url = meta_url + "/meta/series/" + id + ".json";
+            if (!meta_url.empty() && meta_url.back() != '/') meta_url += "/";
+            meta_url = meta_url + "meta/series/" + id + ".json";
         }
 
         // Same 2MB-stack rationale as fetchStreams(): large meta responses

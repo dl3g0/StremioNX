@@ -25,6 +25,11 @@ private:
     CatalogDataSource* itemsDataSource = nullptr;
     CatalogMenuDataSource* menuDataSource = nullptr;
 
+    // Identifies the catalog currently shown in items_grid ("type:id:addonurl").
+    // Lets loadCatalogs skip the redundant network fetch + grid rebuild when
+    // an addon add/remove/reorder did not change the selected catalog.
+    std::string lastShownCatalogKey;
+
     AddonManager::CatalogsChangedToken changeToken = 0;
 
     std::mutex reload_mutex;

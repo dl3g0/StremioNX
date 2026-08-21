@@ -1,26 +1,22 @@
-# StremioNX v0.2
+# StremioNX v0.3
 
-Release **v0.2** de **StremioNX**, un cliente de Stremio para Nintendo Switch (homebrew). Navegá catálogos, elegí películas o episodios de series, y reproducí directo desde los add-ons que instales en tu servidor local.
+Release **v0.3** de **StremioNX**, un cliente de Stremio para Nintendo Switch (homebrew). Navegá catálogos, elegí películas o episodios de series, y reproducí directo desde tus complementos y torrents en tu servidor local.
 
 > Proyecto homebrew con fines educativos/personales. No está afiliado a Stremio ni a Nintendo.
 
-## Cambios desde v0.1
+## Cambios y Novedades en v0.3
 
-### Correcciones
+### Nuevas funcionalidades y optimizaciones
 
-- **Crash al ocultar/reordenar catálogos**: se eliminaron varios *use-after-free* que ocurrían al modificar la visibilidad u orden de los catálogos desde Ajustes. Se corrigió el manejo de foco en `Application::giveFocus(nullptr)` (el foco quedaba apuntando a memoria liberada), el reciclado de celdas de la grilla de catálogos (`dequeueReusableCell`) y la liberación de celdas sin cola (`freeView`). Además se restaura el foco de navegación después de reconstruir la vista de Ajustes.
-- **Búsqueda sin resultados**: buscar series/películas (p. ej. "la casa de papel") podía devolver "Sin resultados" porque el parseo de JSON fallaba cuando la respuesta de Cinemeta traía campos `null` (`runtime`, `description`...). El parseo ahora tolera valores ausentes o `null` en manifest, catálogos, streams, episodios, meta y resultados de búsqueda.
-- **Loader del reproductor**: ahora muestra el logo de la película/serie mientras carga el video, en lugar del póster.
-
-### Nuevas funcionalidades
-
-- **Sección de búsqueda**: nuevo buscador de películas y series con filtro por tipo (Películas / Series / Todo) y grilla de resultados que abre la ficha del contenido.
-- **Series completas**: soporte de series con selector de temporada, lista de episodios con sinopsis y carga de fuentes por episodio, con filtro por add-on desde la barra lateral.
-
-### Mejoras
-
-- **Nuevo logo de la app**: icono propio en el menú home del Switch y logo en Ajustes → Sobre.
-- **Versión 0.2.0** (se actualiza el NACP y el panel Sobre).
+- **Motor de streaming por torrent (P2P / Torrentio)**:
+  1. Soporte completo de trackers devueltos por complementos como Torrentio (`sources`) y fallback de trackers de alta disponibilidad.
+  2. Resolución rápida de metadatos (BEP 9).
+  3. **Decodificación por Hardware GPU Tegra X1** (`hwdec = auto`, `vd-lavc-dr = yes`, `opengl-glfinish = yes`): reproducción a 1080p y 4K fluida sin caídas de frames ni sobrecarga de CPU.
+  4. **Caché en RAM de 128 MB**: buffer continuo para evitar congelaciones de reproducción.
+  5. Cancelación limpia con botón **(B)** en cualquier momento sin congelaciones ni cuelgues.
+- **Sincronización con cuenta Stremio**: inicio de sesión y sincronización directa de complementos desde tu cuenta oficial de Stremio.
+- **Ajustes como pestaña nativa**: interfaz moderna, fluida y 100% libre de crasheos de memoria o fugas.
+- **Servidor Web Local**: gestión de complementos vía `http://<ip-switch>:8080`.
 
 ## Características
 

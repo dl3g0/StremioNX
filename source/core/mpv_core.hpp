@@ -14,6 +14,8 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+typedef struct torrentfs torrentfs;
+
 class MPVCore : public brls::Singleton<MPVCore> {
 public:
     struct Track {
@@ -35,6 +37,7 @@ public:
     void resume();
     void pause();
     void stop();
+    void stopSync();
     void seek(double p);
     void seekPercent(double value);
     void seekRelative(double sec);
@@ -45,6 +48,10 @@ public:
     std::vector<Track> getSubtitleTracks() const;
     void setAudioTrack(int64_t id);
     void setSubTrack(int64_t id);
+    // Loads an external subtitle file (URL or path) into the current file.
+    // Uses "auto" flags so it joins the track-list without forcing selection.
+    void addSubtitle(const std::string& url, const std::string& title,
+                     const std::string& lang, const std::string& encoding = "");
     
     bool isStopped() const;
     bool isPlaying() const;
@@ -72,6 +79,8 @@ private:
     mpv_handle *mpv                 = nullptr;
     mpv_render_context *mpv_context = nullptr;
     brls::Rect rect                 = {0, 0, 1920, 1080};
+
+    torrentfs *torrentTfs_ = nullptr;
 
     GLint default_framebuffer = 0;
     GLuint media_framebuffer  = 0;

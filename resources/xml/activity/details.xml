@@ -64,14 +64,14 @@
     <brls:Box
         id="details/streams_container"
         axis="column"
-        width="31.7%"
+        width="34.9%"
         backgroundColor="#0b0812F2"
         padding="16">
         
         <!-- Header -->
         <brls:Box axis="row" width="100%" marginBottom="15" alignItems="center">
-            <brls:Label id="details/streams_title" text="All" fontSize="20" grow="1" singleLine="true" />
-            <brls:Button id="details/btn_fuentes" text="Fuentes" fontSize="14" />
+            <brls:Label id="details/streams_title" text="All" fontSize="22" grow="1" singleLine="true" />
+            <brls:Button id="details/btn_fuentes" text="Fuentes" fontSize="15" />
         </brls:Box>
 
         <!-- Loading state (spinner + text) while streams are being fetched.

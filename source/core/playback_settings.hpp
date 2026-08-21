@@ -21,6 +21,9 @@ public:
     std::string audioLang() const;
     void setAudioLang(const std::string& code);
 
+    bool show4KSources() const;
+    void setShow4KSources(bool value);
+
     const std::vector<LanguageOption>& getLanguageOptions() const { return language_options; }
 
     void load();
@@ -33,6 +36,7 @@ private:
     bool subs_enabled = true;
     std::string subs_lang = "spa";
     std::string audio_lang = "spa";
+    bool show_4k = false;
 
     std::vector<LanguageOption> language_options;
 

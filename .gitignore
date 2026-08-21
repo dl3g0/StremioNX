@@ -44,3 +44,6 @@ Thumbs.db
 /romfs/
 *.suprx
 *.dksh
+NUL
+
+RELEASE_NOTES.md

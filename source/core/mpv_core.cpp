@@ -1,6 +1,7 @@
 #include "core/mpv_core.hpp"
 #include "core/playback_settings.hpp"
 #include "core/file_paths.hpp"
+#include "core/torrent_player.hpp"
 #include <borealis/core/application.hpp>
 #include <borealis/core/thread.hpp>
 #ifndef NANOVG_GL3
@@ -13,6 +14,8 @@
 #include <switch.h>
 #include <sys/stat.h>
 #endif
+
+extern "C" int stream_register(mpv_handle *mpv, torrentfs **holder);
 
 static inline void check_error(int status) {
     if (status < 0) {
@@ -94,13 +97,16 @@ void MPVCore::init() {
     mpv_set_option_string(mpv, "keep-open", "yes");
     mpv_set_option_string(mpv, "ytdl", "no");
     mpv_set_option_string(mpv, "audio-channels", "stereo");
+    mpv_set_option_string(mpv, "audio-normalize-downmix", "no");
     mpv_set_option_string(mpv, "osd-level", "1");
     mpv_set_option_string(mpv, "video-timing-offset", "0");
     mpv_set_option_string(mpv, "hr-seek", "yes");
     mpv_set_option_string(mpv, "loop-file", "no");
-    mpv_set_option_string(mpv, "demuxer-lavf-analyzeduration", "0.4");
-    mpv_set_option_string(mpv, "demuxer-lavf-probescore", "24");
-    mpv_set_option_string(mpv, "cache", "no");
+    mpv_set_option_string(mpv, "cache", "yes");
+    mpv_set_option_string(mpv, "cache-pause", "no");
+    mpv_set_option_string(mpv, "demuxer-max-bytes", "128MiB");
+    mpv_set_option_string(mpv, "demuxer-readahead-secs", "30");
+    mpv_set_option_string(mpv, "cache-secs", "60");
 
     // Apply playback preferences (subtitle/audio defaults).
     auto& playback = PlaybackSettings::getInstance();
@@ -128,11 +134,10 @@ void MPVCore::init() {
     }
 #endif
 #if defined(__SWITCH__)
-    mpv_set_option_string(mpv, "hwdec", "no");
-    mpv_set_option_string(mpv, "vd-lavc-dr", "no");
-    mpv_set_option_string(mpv, "vd-lavc-threads", "4");
-    mpv_set_option_string(mpv, "video-sync", "audio");
-    mpv_set_option_string(mpv, "opengl-glfinish", "no");
+    mpv_set_option_string(mpv, "hwdec", "auto");
+    mpv_set_option_string(mpv, "hwdec-extra-frames", "32");
+    mpv_set_option_string(mpv, "opengl-glfinish", "yes");
+    mpv_set_option_string(mpv, "vd-lavc-dr", "yes");
 #else
     mpv_set_option_string(mpv, "hwdec", "auto");
 #endif
@@ -142,6 +147,12 @@ void MPVCore::init() {
         brls::fatal("Could not initialize mpv context");
     }
     brls::Logger::info("DEBUG: init step mpv_initialize done");
+
+    if (stream_register(mpv, &torrentTfs_) < 0) {
+        brls::Logger::error("DEBUG: stream_register failed");
+    } else {
+        brls::Logger::info("DEBUG: stream_register torrent:// done");
+    }
 
     mpv_request_log_messages(mpv, "debug");
 
@@ -414,6 +425,17 @@ void MPVCore::eventMainLoop() {
 void MPVCore::setUrl(const std::string &url) {
     if (!this->mpv) return;
     brls::Logger::info("DEBUG: MPVCore::setUrl started");
+    if (url.rfind("torrent://", 0) == 0) {
+        this->torrentTfs_ =
+            stremio_torrent::TorrentPlayer::getInstance().getTorrentfs();
+        mpv_set_option_string(this->mpv, "cache", "yes");
+        mpv_set_option_string(this->mpv, "cache-pause", "no");
+        mpv_set_option_string(this->mpv, "cache-secs", "60");
+        mpv_set_option_string(this->mpv, "demuxer-readahead-secs", "30");
+        mpv_set_option_string(this->mpv, "demuxer-max-bytes", "128MiB");
+    } else {
+        mpv_set_option_string(this->mpv, "cache", "no");
+    }
     const char *args[] = {"loadfile", url.c_str(), NULL};
     brls::Logger::info("DEBUG: MPVCore::setUrl mpv_command_async calling");
     mpv_command_async(this->mpv, 0, args);
@@ -437,6 +459,13 @@ void MPVCore::stop() {
     if (!this->mpv) return;
     const char *args[] = {"stop", NULL};
     mpv_command_async(this->mpv, 0, args);
+}
+
+void MPVCore::stopSync() {
+    this->readyToRender = false;
+    if (!this->mpv) return;
+    const char *args[] = {"stop", NULL};
+    mpv_command(this->mpv, args);
 }
 
 void MPVCore::seek(double p) {
@@ -537,6 +566,16 @@ std::vector<MPVCore::Track> MPVCore::getSubtitleTracks() const {
         if (t.type == "sub")
             result.push_back(t);
     return result;
+}
+
+void MPVCore::addSubtitle(const std::string& url, const std::string& title, const std::string& lang, const std::string& encoding) {
+    if (!this->mpv) return;
+    if (!encoding.empty()) {
+        const char* cargs[] = {"set", "sub-codepage", encoding.c_str(), NULL};
+        mpv_command_async(this->mpv, 0, cargs);
+    }
+    const char* args[] = {"sub-add", url.c_str(), "auto", title.c_str(), lang.c_str(), NULL};
+    mpv_command_async(this->mpv, 0, args);
 }
 
 void MPVCore::setAudioTrack(int64_t id) {

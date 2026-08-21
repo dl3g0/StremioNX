@@ -1,7 +1,9 @@
 #pragma once
 
 #include <borealis.hpp>
+#include <vector>
 #include "core/mpv_core.hpp"
+#include "core/addon_manager.hpp"
 
 class VideoView : public brls::Box {
 public:
@@ -13,6 +15,9 @@ public:
     // Loads an image (e.g. the Cinemeta logo) shown as a loading indicator
     // centered over the video while mpv is still buffering/loading.
     void setLoaderImage(const std::string& url);
+    // Queues external subtitles from addons to load into mpv once the file
+    // has loaded (sub-add requires a loaded file). Safe to call any time.
+    void setSubtitles(const std::vector<SubtitleItem>& subs);
 
     void draw(NVGcontext* vg, float x, float y, float width, float height, brls::Style style, brls::FrameContext* ctx) override;
 
@@ -50,11 +55,17 @@ private:
     void openAudioDropdown();
     void openSubDropdown();
     std::string trackLabel(const std::vector<MPVCore::Track>& tracks, int64_t currentId, const std::string& noneText);
+    void loadPendingSubtitles();
+    void maybeAutoSelectSubs();
 
     bool isPaused = false;
     bool osdVisible = true;
     time_t osdLastShowTime = 0;
     bool updatingProgress = false;
+
+    std::vector<SubtitleItem> pendingSubtitles;
+    bool pendingSubtitlesLoaded = false;
+    bool autoSelectDone = false;
 };
 
 

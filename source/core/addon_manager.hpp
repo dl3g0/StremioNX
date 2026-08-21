@@ -49,7 +49,20 @@ struct StreamItem {
     std::string ytId;
     std::string externalUrl;
     std::string addonName;
+    std::vector<std::string> sources;
     bool cached = false;
+};
+
+// A subtitle track offered by a subtitle addon (e.g. OpenSubtitles). `url` is
+// the direct subtitle file that mpv can load; `lang` is the addon's display
+// language ("Spanish", "English"...), `name` an optional description.
+struct SubtitleItem {
+    std::string id;
+    std::string url;
+    std::string lang;
+    std::string name;
+    std::string addonName;
+    std::string encoding;
 };
 
 // A single episode of a series, parsed from the Cinemeta (or any addon) meta
@@ -88,6 +101,12 @@ public:
     // the list progressively instead of waiting for the slowest addon.
     void fetchStreams(const std::string& type, const std::string& id, std::function<void(const std::vector<StreamItem>&, bool loading)> callback);
 
+    // Fetch subtitles for a video from every installed addon that answers the
+    // /subtitles resource (e.g. OpenSubtitles). The callback fires once with
+    // the subtitles gathered from all addons, de-duplicated by URL.
+    void fetchSubtitles(const std::string& type, const std::string& id,
+                        std::function<void(const std::vector<SubtitleItem>&)> callback);
+
     // Fetch the episode list of a series (from the addon meta endpoint,
     // e.g. Cinemeta). The callback fires once with every episode of every
     // season, grouped/ordered as returned by the addon.
@@ -109,6 +128,12 @@ public:
 
     void addAddon(const std::string& url);
     void removeAddon(const std::string& url);
+    // Removes several add-ons at once (buffered settings exit): applies all
+    // removals to the in-memory lists and notifies the UI a single time.
+    void removeAddons(const std::vector<std::string>& urls);
+    // Installs every missing add-on URL at once (from an account sync) and
+    // refreshes manifests/catalogs once. Returns the number of new add-ons.
+    int installAddons(const std::vector<std::string>& urls);
     void loadAddons();
     void saveAddons();
 
@@ -138,6 +163,14 @@ public:
     std::vector<AddonManifest> getInstalledManifests() { 
         std::lock_guard<std::mutex> lock(addons_mutex);
         return installed_manifests; 
+    }
+    // Base URL of the addon serving the given catalog, or "" if unknown.
+    std::string getCatalogAddonUrl(const std::string& type, const std::string& id) {
+        std::lock_guard<std::mutex> lock(catalog_mutex);
+        for (const auto& cat : available_catalogs) {
+            if (cat.type == type && cat.id == id) return cat.addon_url;
+        }
+        return "";
     }
     std::mutex& getMutex() { return catalog_mutex; }
 

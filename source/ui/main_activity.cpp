@@ -1,7 +1,5 @@
 #include "main_activity.hpp"
 #include "views/auto_tab_frame.hpp"
-#include "views/custom_button.hpp"
-#include "settings_activity.hpp"
 #include "../core/logger.hpp"
 
 MainActivity::MainActivity() {
@@ -9,10 +7,6 @@ MainActivity::MainActivity() {
 }
 
 void MainActivity::onContentAvailable() {
-    settingButton->registerClickAction([this](brls::View* view) {
-        brls::Application::pushActivity(new SettingsActivity(), brls::TransitionAnimation::FADE);
-        return true;
-    });
 }
 
 MainActivity::~MainActivity() {

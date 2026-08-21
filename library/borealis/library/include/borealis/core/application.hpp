@@ -197,6 +197,8 @@ class Application
 
     static bool isInputBlocks();
 
+    static Time getLastInputBlockTimeUsec();
+
     static const ControllerState& getControllerState();
 
     static void setCommonFooter(std::string footer);
@@ -395,6 +397,7 @@ class Application
     inline static void updateFPS();
 
     inline static unsigned blockInputsTokens = 0; // any value > 0 means inputs are blocked
+    inline static Time lastInputBlockTimeUsec  = 0;
     inline static bool muteSounds            = false;
 
     inline static std::string commonFooter;

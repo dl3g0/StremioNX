@@ -16,6 +16,9 @@ public:
     // Obtener datos binarios (ej. Imagenes)
     bool getBinary(const std::string& url, std::vector<unsigned char>& buffer);
 
+    // POST JSON y obtener la respuesta de texto (ej. API de Stremio)
+    bool post(const std::string& url, const std::string& body, std::string& response);
+
 private:
     HttpClient() = default;
     ~HttpClient() = default;

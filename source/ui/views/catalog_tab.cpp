@@ -155,6 +155,17 @@ void CatalogTab::loadCatalogs() {
     auto catalogs = AddonManager::getInstance().getAvailableCatalogs();
     
     menuDataSource = new CatalogMenuDataSource(catalogs, [this](const std::string& type, const std::string& id) {
+        // Rapid addon add/remove/reorder cycles triggered a fresh catalog
+        // fetch + full grid rebuild every time, even when the selected
+        // catalog was unchanged; that redundant churn crashed the emulator's
+        // host GPU inside the catalog curl. Skip the fetch when the newly
+        // selected catalog matches the one already on screen.
+        std::string addonUrl = AddonManager::getInstance().getCatalogAddonUrl(type, id);
+        std::string targetKey = type + ":" + id + ":" + addonUrl;
+        if (!targetKey.empty() && targetKey == this->lastShownCatalogKey && this->itemsDataSource) {
+            return;
+        }
+        
         // Fetch items for this catalog
         struct ThreadData {
             std::string type;
@@ -178,10 +189,12 @@ void CatalogTab::loadCatalogs() {
                 
                 auto alive = d->alive;
                 auto view = d->view;
-                brls::sync([alive, view, items]() {
+                auto key = d->type + ":" + d->id + ":" + AddonManager::getInstance().getCatalogAddonUrl(d->type, d->id);
+                brls::sync([alive, view, items, key]() {
                     if (*alive) {
                         view->itemsDataSource = new CatalogDataSource(items);
                         view->items_grid->setDataSource(view->itemsDataSource);
+                        view->lastShownCatalogKey = key;
                     }
                 });
             }

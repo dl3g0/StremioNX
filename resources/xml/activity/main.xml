@@ -29,27 +29,13 @@
                 <SearchTab/>
             </Tab>
 
-        </AutoTabFrame>
-        <brls:Box
-                wireframe="false"
-                width="100"
-                axis="column"
-                justifyContent="center"
-                alignItems="center"
-                positionType="absolute"
-                positionBottom="20">
+            <Tab label=""
+                 fontSize="18"
+                 icon="@res/png/ico-setting.png"
+                 iconActivate="@res/png/ico-setting.png">
+                <SettingsTab/>
+            </Tab>
 
-            <CustomButton
-                    id="main/setting"
-                    focusable="true"
-                    highlightCornerRadius="50"
-                    cornerRadius="50"
-                    wireframe="false">
-                <brls:Image
-                        width="48"
-                        height="48"
-                        image="@res/png/ico-setting.png"/>
-            </CustomButton>
-        </brls:Box>
+        </AutoTabFrame>
     </brls:Box>
 </brls:AppletFrame>

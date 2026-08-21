@@ -7,17 +7,21 @@
 #include <switch.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 #else
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 #endif
 
 #include <cstring>
+#include <cstdlib>
+#include <cctype>
 #include <vector>
 
 WebServer& WebServer::getInstance() {
@@ -104,7 +108,7 @@ void WebServer::pollServer() {
             pthread_t thread;
             pthread_attr_t attr;
             pthread_attr_init(&attr);
-            pthread_attr_setstacksize(&attr, 512 * 1024);
+            pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
             pthread_create(&thread, &attr, WebServer::handleConnection, (void*)(intptr_t)client_socket);
             pthread_detach(thread);
             pthread_attr_destroy(&attr);
@@ -124,8 +128,8 @@ void* WebServer::handleConnection(void* arg) {
     char buffer[4096] = {0};
     int bytes_read = recv(client_socket, buffer, 4095, 0);
     if (bytes_read > 0) {
-        std::string request(buffer);
-        if (request.find("GET / ") == 0) {
+    std::string request(buffer);
+    if (request.find("GET / ") == 0) {
             std::string html = R"(HTTP/1.1 200 OK
 Content-Type: text/html
 
@@ -227,10 +231,13 @@ void WebServer::stop() {
 std::string WebServer::getLocalIP() {
 #ifdef __SWITCH__
     u32 ip = 0;
-    nifmGetCurrentIpAddress(&ip);
+    if (R_FAILED(nifmGetCurrentIpAddress(&ip))) {
+        return "127.0.0.1";
+    }
     struct in_addr addr;
     addr.s_addr = ip;
-    return std::string(inet_ntoa(addr));
+    const char* str = inet_ntoa(addr);
+    return str ? std::string(str) : "127.0.0.1";
 #else
     return "127.0.0.1";
 #endif

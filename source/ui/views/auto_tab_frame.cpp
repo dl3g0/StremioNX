@@ -260,7 +260,7 @@ void AutoTabFrame::handleXMLElement(tinyxml2::XMLElement* element) {
 AutoTabFrame::~AutoTabFrame() {
     brls::Logger::debug("delete AutoTabFrame");
     if (this->activeTab) {
-        this->getChildren().erase(this->getChildren().begin() + 1);
+        this->removeView(this->activeTab, false);
         this->activeTab = nullptr;
     }
 }
@@ -289,6 +289,8 @@ void AutoTabFrame::setDefaultTabIndex(size_t index) { this->sidebar->setDefaultF
 size_t AutoTabFrame::getDefaultTabIndex() { return this->sidebar->getDefaultFocusedIndex(); }
 
 brls::View* AutoTabFrame::getNextFocus(brls::FocusDirection direction, brls::View* currentView) {
+    if (!currentView) return nullptr;
+
     if (currentView != this->sidebar) {
         if (disableNavigationDown && direction == brls::FocusDirection::DOWN) {
             return nullptr;
@@ -299,6 +301,9 @@ brls::View* AutoTabFrame::getNextFocus(brls::FocusDirection direction, brls::Vie
     }
 
     void* parentUserData = currentView->getParentUserData();
+    if (!parentUserData) {
+        return nullptr;
+    }
 
     if ((this->getAxis() == brls::Axis::ROW && direction != brls::FocusDirection::LEFT &&
          direction != brls::FocusDirection::RIGHT) ||
@@ -309,7 +314,7 @@ brls::View* AutoTabFrame::getNextFocus(brls::FocusDirection direction, brls::Vie
         return next;
     }
 
-    size_t offset = 1;
+    int offset = 1;
 
     if ((this->getAxis() == brls::Axis::ROW && direction == brls::FocusDirection::LEFT &&
          tabBarPosition == AutoTabBarPosition::LEFT) ||
@@ -319,10 +324,10 @@ brls::View* AutoTabFrame::getNextFocus(brls::FocusDirection direction, brls::Vie
         offset = -1;
     }
 
-    size_t currentFocusIndex = *((size_t*)parentUserData) + offset;
+    int currentFocusIndex = (int)(*((size_t*)parentUserData)) + offset;
     View* currentFocus       = nullptr;
 
-    while (!currentFocus && currentFocusIndex >= 0 && currentFocusIndex < this->getChildren().size()) {
+    while (!currentFocus && currentFocusIndex >= 0 && currentFocusIndex < (int)this->getChildren().size()) {
         currentFocus = this->getChildren()[currentFocusIndex]->getDefaultFocus();
         currentFocusIndex += offset;
     }
@@ -878,7 +883,10 @@ void AutoSidebarItem::setHorizontalMode(bool value) {
     }
 }
 
-size_t AutoSidebarItem::getCurrentIndex() { return *((size_t*)this->getParentUserData()); }
+size_t AutoSidebarItem::getCurrentIndex() { 
+    void* ud = this->getParentUserData();
+    return ud ? *((size_t*)ud) : 0; 
+}
 
 void AutoSidebarItem::setAttachedViewCreator(TabViewCreator creator) { this->attachedViewCreator = creator; }
 

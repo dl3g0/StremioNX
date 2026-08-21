@@ -1,6 +1,8 @@
 #include "application.hpp"
 #include <pthread.h>
 #include <algorithm>
+#include <cstdlib>
+#include <cstdint>
 #include "../core/addon_manager.hpp"
 #include "../core/logger.hpp"
 #include <thread>
@@ -12,8 +14,11 @@
 #include <borealis/core/application.hpp>
 #include "../core/http_client.hpp"
 #include "../core/task_queue.hpp"
-#include "settings_activity.hpp"
 #include "player_activity.hpp"
+#include "torrent_activity.hpp"
+#include "../core/magnet_resolver.hpp"
+#include "../core/playback_settings.hpp"
+#include "../core/web_server.hpp"
 
 using namespace brls;
 
@@ -25,7 +30,7 @@ static std::string cleanStreamText(const std::string& text) {
             result += '\n';
         } else if (c == '\t' || c == '\r') {
             result += ' ';
-        } else if (c >= 32 && c < 127) {
+        } else if (c >= 0x20 && c != 0x7F) {
             result += (char)c;
         }
     }
@@ -43,6 +48,24 @@ static std::string cleanStreamText(const std::string& text) {
         }
     }
     return cleaned;
+}
+
+static bool isResolutionOver1080p(const std::string& name, const std::string& title) {
+    std::string n = name;
+    std::string t = title;
+    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+    std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+    static const char* tokens[] = {"2160", "4320", "8k", "4k", "3840", "7680"};
+    for (const char* tok : tokens) {
+        if (n.find(tok) != std::string::npos || t.find(tok) != std::string::npos)
+            return true;
+    }
+    if ((n.find("uhd") != std::string::npos ||
+         t.find("uhd") != std::string::npos) &&
+        n.find("1080p") == std::string::npos &&
+        t.find("1080p") == std::string::npos)
+        return true;
+    return false;
 }
 
 // DetailsActivity
@@ -84,7 +107,11 @@ DetailsActivity::DetailsActivity(const MetaItem& item) : item(item) {
     brls::Button* btnAddons = dynamic_cast<brls::Button*>(rootBox->getView("details/btn_addons"));
     if (btnAddons) {
         btnAddons->registerClickAction([](brls::View* view) {
-            brls::Application::pushActivity(new SettingsActivity(), brls::TransitionAnimation::FADE);
+            std::string ip = WebServer::getInstance().getLocalIP();
+            brls::Dialog* d = new brls::Dialog(
+                "Instalar complementos\n\nPuedes administrar complementos desde la pestana Ajustes en el menu principal o navegando a:\nhttp://" + ip + ":8080");
+            d->addButton("Aceptar", []() {});
+            d->open();
             return true;
         });
     }
@@ -206,6 +233,7 @@ void DetailsActivity::loadStreams(const std::string& id) {
     streamFilter.clear();
     fetchedStreams.clear();
     streamsLoading = true;
+    activeStreamId = id;
 
     // Progressive callback: gets called once per addon (loading=true) and a
     // final time when every addon has answered (loading=false).
@@ -357,13 +385,13 @@ void DetailsActivity::renderEpisodeList() {
 
         brls::Label* nameLbl = new brls::Label();
         nameLbl->setText(cleanStreamText(epName));
-        nameLbl->setFontSize(18);
+        nameLbl->setFontSize(21);
         nameLbl->setWidthPercentage(100);
         nameLbl->setMarginBottom(4);
 
         brls::Label* overviewLbl = new brls::Label();
         overviewLbl->setText(cleanStreamText(ep.overview));
-        overviewLbl->setFontSize(12);
+        overviewLbl->setFontSize(14);
         overviewLbl->setWidthPercentage(100);
         overviewLbl->setSingleLine(false);
 
@@ -422,6 +450,9 @@ void DetailsActivity::renderStreamList() {
     brls::View* firstCell = nullptr;
     for (const auto& stream : fetchedStreams) {
         if (!streamFilter.empty() && stream.addonName != streamFilter) continue;
+        if (!PlaybackSettings::getInstance().show4KSources() &&
+            isResolutionOver1080p(stream.name, stream.title))
+            continue;
         
         brls::Box* cell = new brls::Box(brls::Axis::COLUMN);
         cell->setFocusable(true);
@@ -435,13 +466,13 @@ void DetailsActivity::renderStreamList() {
         std::string nameText = cleanStreamText(stream.name.empty() ? stream.title : stream.name);
         nameText = cleanStreamText(nameText);
         nameLbl->setText(nameText);
-        nameLbl->setFontSize(20);
+        nameLbl->setFontSize(24);
         nameLbl->setWidthPercentage(100);
         nameLbl->setMarginBottom(4);
 
         brls::Label* titleLbl = new brls::Label();
         titleLbl->setText(cleanStreamText(stream.title.empty() ? stream.description : stream.title));
-        titleLbl->setFontSize(13);
+        titleLbl->setFontSize(15);
         titleLbl->setWidthPercentage(100);
         titleLbl->setSingleLine(false);
         
@@ -454,7 +485,29 @@ void DetailsActivity::renderStreamList() {
             // back to the poster when the catalog has no logo for it.
             std::string loaderImg = this->item.logo_url;
             if (loaderImg.empty()) loaderImg = this->item.poster_url;
-            brls::Application::pushActivity(new PlayerActivity(stream.url, streamTitle, loaderImg));
+            std::string source = stream.url;
+            bool isTorrent = stremio_torrent::MagnetResolver::isMagnet(source) ||
+                             stremio_torrent::MagnetResolver::isTorrentUrl(source);
+            if (!isTorrent && !stream.infoHash.empty()) {
+                source = stremio_torrent::MagnetResolver::buildMagnet(stream.infoHash, stream.sources);
+                isTorrent = true;
+            } else if (isTorrent &&
+                       stremio_torrent::MagnetResolver::isMagnet(source)) {
+                source = stremio_torrent::MagnetResolver::appendTrackers(source, stream.sources);
+            }
+            if (isTorrent) {
+                int fileIdx = stream.fileIdx.empty()
+                                  ? -1
+                                  : atoi(stream.fileIdx.c_str());
+                brls::Application::pushActivity(
+                    new TorrentActivity(source, fileIdx, streamTitle, loaderImg,
+                                        item.type, activeStreamId),
+                    brls::TransitionAnimation::FADE);
+            } else {
+                brls::Application::pushActivity(
+                    new PlayerActivity(source, streamTitle, loaderImg,
+                                       item.type, activeStreamId));
+            }
             return true;
         });
         

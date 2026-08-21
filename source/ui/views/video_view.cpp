@@ -5,10 +5,12 @@
 #include <borealis/core/time.hpp>
 #include "../../core/http_client.hpp"
 #include "../../core/task_queue.hpp"
+#include "../../core/playback_settings.hpp"
 #include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <cmath>
+#include <algorithm>
 #include <vector>
 
 std::string VideoView::formatTime(int64_t totalSeconds) {
@@ -193,6 +195,14 @@ VideoView::VideoView() {
         return true;
     }, true);
 
+    // Keep the OSD track labels and the subtitle auto-selection in sync with
+    // mpv's track-list (fires when the file loads and when external subtitles
+    // added via sub-add finish loading).
+    mpvCore->getTrackListChangedEvent().subscribe([this]() {
+        this->refreshTrackUI();
+        this->maybeAutoSelectSubs();
+    });
+
     showOSD();
 }
 
@@ -230,6 +240,62 @@ void VideoView::setTitle(const std::string& title) {
     if (titleLabel) {
         titleLabel->setText(title);
     }
+}
+
+void VideoView::setSubtitles(const std::vector<SubtitleItem>& subs) {
+    pendingSubtitles = subs;
+    pendingSubtitlesLoaded = false;
+    autoSelectDone = false;
+    if (mpvCore->fileLoaded) {
+        loadPendingSubtitles();
+    }
+}
+
+void VideoView::loadPendingSubtitles() {
+    if (pendingSubtitlesLoaded) return;
+    pendingSubtitlesLoaded = true;
+    for (const auto& s : pendingSubtitles) {
+        mpvCore->addSubtitle(s.url, s.name, s.lang, s.encoding);
+    }
+}
+
+void VideoView::maybeAutoSelectSubs() {
+    if (autoSelectDone) return;
+    if (!pendingSubtitlesLoaded || pendingSubtitles.empty()) return;
+    if (!PlaybackSettings::getInstance().subsEnabled()) {
+        autoSelectDone = true;
+        return;
+    }
+
+    auto subTracks = mpvCore->getSubtitleTracks();
+    if (subTracks.empty()) return;  // external subs not in track-list yet
+
+    for (const auto& t : subTracks) {
+        if (t.selected) {
+            autoSelectDone = true;
+            return;
+        }
+    }
+
+    // Nothing selected: prefer a track whose language matches the preferred
+    // code (e.g. "spa" inside "Spanish"), otherwise the first subtitle.
+    std::string pref = PlaybackSettings::getInstance().subsLang();
+    std::transform(pref.begin(), pref.end(), pref.begin(), ::tolower);
+    int64_t fallback = -1, matched = -1;
+    for (const auto& t : subTracks) {
+        if (fallback < 0) fallback = t.id;
+        std::string lang = t.lang;
+        std::transform(lang.begin(), lang.end(), lang.begin(), ::tolower);
+        if (matched < 0 && !pref.empty() && lang.find(pref) != std::string::npos)
+            matched = t.id;
+    }
+
+    int64_t pick = matched > 0 ? matched : fallback;
+    if (pick > 0) {
+        currentSubId = pick;
+        mpvCore->setSubTrack(pick);
+    }
+    autoSelectDone = true;
 }
 
 void VideoView::togglePlay() {
@@ -299,6 +365,12 @@ void VideoView::draw(NVGcontext* vg, float x, float y, float width, float height
         float cx = x + (width - imgW) / 2.0f;
         float cy = y + (height - imgH) / 2.0f;
         loaderImage->draw(vg, cx, cy, imgW, imgH, style, ctx);
+    }
+
+    // External subtitles need a loaded file to attach to; sub-add once mpv
+    // reports the file ready.
+    if (!pendingSubtitlesLoaded && mpvCore->fileLoaded && !pendingSubtitles.empty()) {
+        loadPendingSubtitles();
     }
 
     // Auto-hide OSD after 5 seconds of inactivity (only when playing)
@@ -412,6 +484,7 @@ void VideoView::openSubDropdown() {
 
     auto* dropdown = new brls::Dropdown("Subtítulos", values, [this, ids](int index) {
         if (index >= 0 && index < (int)ids.size()) {
+            this->autoSelectDone = true;
             this->currentSubId = ids[index];
             mpvCore->setSubTrack(this->currentSubId);
             this->showOSD();

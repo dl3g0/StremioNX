@@ -27,6 +27,9 @@ public:
     // Currently fetched streams, kept so the "Fuentes" filter can re-render
     // the list without re-fetching.
     std::vector<StreamItem> fetchedStreams;
+    // The id last passed to loadStreams (imdb id or "<series>:<season>:<ep>").
+    // Used to fetch subtitles for the selected stream.
+    std::string activeStreamId;
     // Empty = show all; otherwise only streams from this addon URL.
     std::string streamFilter;
     // True while addons are still being polled; prevents the "No streams"

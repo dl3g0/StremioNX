@@ -17,5 +17,4 @@ public:
 
 private:
     BRLS_BIND(AutoTabFrame, tabFrame, "main/tabFrame");
-    BRLS_BIND(CustomButton, settingButton, "main/setting");
 };

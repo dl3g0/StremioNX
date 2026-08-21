@@ -78,6 +78,19 @@ void PlaybackSettings::setAudioLang(const std::string& code) {
     save();
 }
 
+bool PlaybackSettings::show4KSources() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return show_4k;
+}
+
+void PlaybackSettings::setShow4KSources(bool value) {
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        show_4k = value;
+    }
+    save();
+}
+
 void PlaybackSettings::load() {
     std::lock_guard<std::mutex> lock(mutex);
     FilePaths::ensureDataDir();
@@ -92,6 +105,8 @@ void PlaybackSettings::load() {
                 subs_lang = j["subs_lang"].get<std::string>();
             if (j.contains("audio_lang") && j["audio_lang"].is_string())
                 audio_lang = j["audio_lang"].get<std::string>();
+            if (j.contains("show_4k") && j["show_4k"].is_boolean())
+                show_4k = j["show_4k"].get<bool>();
         } catch (...) {}
     }
 }
@@ -104,6 +119,7 @@ void PlaybackSettings::save() {
         j["subs_enabled"] = subs_enabled;
         j["subs_lang"] = subs_lang;
         j["audio_lang"] = audio_lang;
+        j["show_4k"] = show_4k;
         file << j.dump(4);
     }
 }

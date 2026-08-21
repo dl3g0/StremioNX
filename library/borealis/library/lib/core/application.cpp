@@ -1134,6 +1134,7 @@ void Application::blockInputs(bool muteSounds)
 {
     Application::muteSounds |= muteSounds;
     Application::blockInputsTokens += 1;
+    Application::lastInputBlockTimeUsec = getCPUTimeUsec();
     getGlobalHintsUpdateEvent()->fire();
     Logger::debug("Adding an inputs block token (tokens={})", Application::blockInputsTokens);
 }
@@ -1152,6 +1153,11 @@ void Application::unblockInputs()
 bool Application::isInputBlocks()
 {
     return Application::blockInputsTokens > 0;
+}
+
+Time Application::getLastInputBlockTimeUsec()
+{
+    return Application::lastInputBlockTimeUsec;
 }
 
 void Application::setSwapInputKeys(bool swap)
