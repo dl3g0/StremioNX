@@ -33,7 +33,7 @@ private:
     PlaybackSettings();
     ~PlaybackSettings();
 
-    bool subs_enabled = true;
+    bool subs_enabled = false;
     std::string subs_lang = "spa";
     std::string audio_lang = "spa";
     bool show_4k = false;

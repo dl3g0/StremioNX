@@ -385,7 +385,15 @@ bool AddonManager::fetchManifest() {
                 manifest.version = jsonStr(j, "version", "1.0.0");
                 manifest.description = jsonStr(j, "description");
                 manifest.logo = jsonStr(j, "logo");
-                
+                if (j.contains("resources") && j["resources"].is_array()) {
+                    for (auto& r : j["resources"]) {
+                        if (r.is_string()) {
+                            manifest.resources.push_back(r.get<std::string>());
+                        } else if (r.is_object() && r.contains("name") && r["name"].is_string()) {
+                            manifest.resources.push_back(r["name"].get<std::string>());
+                        }
+                    }
+                }
                 new_manifests.push_back(manifest);
                 
                 for (auto& cat : j["catalogs"]) {
@@ -726,16 +734,48 @@ void AddonManager::fetchSubtitles(const std::string& type, const std::string& id
         return;
     }
 
+    std::vector<std::string> target_addons;
+    {
+        std::lock_guard<std::mutex> clock(catalog_mutex);
+        for (const auto& url : addons_copy) {
+            std::string clean = sanitizeManifestUrl(url);
+            bool isSubProvider = false;
+            for (const auto& m : installed_manifests) {
+                if (m.url == clean) {
+                    if (m.resources.empty()) {
+                        isSubProvider = false;
+                    } else {
+                        for (const auto& r : m.resources) {
+                            if (r == "subtitles") {
+                                isSubProvider = true;
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+            if (isSubProvider) {
+                target_addons.push_back(clean);
+            }
+        }
+    }
+
+    if (target_addons.empty()) {
+        if (callback) callback({});
+        return;
+    }
+
     auto results = std::make_shared<std::vector<SubtitleItem>>();
     auto results_mutex = std::make_shared<std::mutex>();
-    auto remaining = std::make_shared<std::atomic<int>>((int)addons_copy.size());
+    auto remaining = std::make_shared<std::atomic<int>>((int)target_addons.size());
 
     auto finish = [results, remaining, callback]() {
         if (--(*remaining) != 0) return;
         if (callback) callback(*results);
     };
 
-    for (const auto& addon : addons_copy) {
+    for (const auto& addon : target_addons) {
         std::string sub_url = addon;
         size_t pos = sub_url.find("manifest.json");
         if (pos != std::string::npos) {

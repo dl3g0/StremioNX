@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <atomic>
 #include <unordered_map>
 #include <functional>
 #include <borealis/core/geometry.hpp>
@@ -100,6 +101,7 @@ private:
     brls::Event<> trackListChangedEvent;
 
     std::vector<Track> tracks;
+    std::atomic<bool> wakeupQueued{false};
 
     void eventMainLoop();
     void initializeVideo();

@@ -203,6 +203,21 @@ VideoView::VideoView() {
         this->maybeAutoSelectSubs();
     });
 
+    mpvCore->getEvent().subscribe([this](int eventId) {
+        if (eventId == MPV_EVENT_END_FILE) {
+            if (this->statusLabel) {
+                this->statusLabel->setText("❌ Error o servidor no disponible");
+                this->statusLabel->setTextColor(nvgRGB(255, 100, 100));
+            }
+            this->showOSD();
+        } else if (eventId == MPV_EVENT_FILE_LOADED) {
+            if (this->statusLabel) {
+                this->statusLabel->setText("▶ Reproduciendo");
+                this->statusLabel->setTextColor(nvgRGB(120, 220, 255));
+            }
+        }
+    });
+
     showOSD();
 }
 
@@ -247,55 +262,19 @@ void VideoView::setSubtitles(const std::vector<SubtitleItem>& subs) {
     pendingSubtitlesLoaded = false;
     autoSelectDone = false;
     if (mpvCore->fileLoaded) {
-        loadPendingSubtitles();
+        maybeAutoSelectSubs();
     }
 }
 
 void VideoView::loadPendingSubtitles() {
-    if (pendingSubtitlesLoaded) return;
-    pendingSubtitlesLoaded = true;
-    for (const auto& s : pendingSubtitles) {
-        mpvCore->addSubtitle(s.url, s.name, s.lang, s.encoding);
-    }
+    // No-op: subtitles are loaded on-demand or selectively via maybeAutoSelectSubs to avoid socket exhaustion
 }
 
 void VideoView::maybeAutoSelectSubs() {
     if (autoSelectDone) return;
-    if (!pendingSubtitlesLoaded || pendingSubtitles.empty()) return;
-    if (!PlaybackSettings::getInstance().subsEnabled()) {
-        autoSelectDone = true;
-        return;
-    }
-
-    auto subTracks = mpvCore->getSubtitleTracks();
-    if (subTracks.empty()) return;  // external subs not in track-list yet
-
-    for (const auto& t : subTracks) {
-        if (t.selected) {
-            autoSelectDone = true;
-            return;
-        }
-    }
-
-    // Nothing selected: prefer a track whose language matches the preferred
-    // code (e.g. "spa" inside "Spanish"), otherwise the first subtitle.
-    std::string pref = PlaybackSettings::getInstance().subsLang();
-    std::transform(pref.begin(), pref.end(), pref.begin(), ::tolower);
-    int64_t fallback = -1, matched = -1;
-    for (const auto& t : subTracks) {
-        if (fallback < 0) fallback = t.id;
-        std::string lang = t.lang;
-        std::transform(lang.begin(), lang.end(), lang.begin(), ::tolower);
-        if (matched < 0 && !pref.empty() && lang.find(pref) != std::string::npos)
-            matched = t.id;
-    }
-
-    int64_t pick = matched > 0 ? matched : fallback;
-    if (pick > 0) {
-        currentSubId = pick;
-        mpvCore->setSubTrack(pick);
-    }
+    if (!mpvCore->fileLoaded) return;
     autoSelectDone = true;
+    currentSubId = 0;
 }
 
 void VideoView::togglePlay() {
@@ -315,17 +294,8 @@ void VideoView::toggleOSD() {
     if (osdVisible) {
         hideOSD();
     } else {
-    mpvCore->getTrackListChangedEvent().subscribe([this]() {
-        this->refreshTrackUI();
-    });
-
-    this->addGestureRecognizer(new brls::TapGestureRecognizer([this](brls::TapGestureStatus status, brls::Sound* sound) {
-        if (status.state == brls::GestureState::END)
-            this->showOSD();
-    }));
-
-    showOSD();
-}
+        showOSD();
+    }
 }
 
 void VideoView::showOSD() {
@@ -367,10 +337,9 @@ void VideoView::draw(NVGcontext* vg, float x, float y, float width, float height
         loaderImage->draw(vg, cx, cy, imgW, imgH, style, ctx);
     }
 
-    // External subtitles need a loaded file to attach to; sub-add once mpv
-    // reports the file ready.
-    if (!pendingSubtitlesLoaded && mpvCore->fileLoaded && !pendingSubtitles.empty()) {
-        loadPendingSubtitles();
+    // Auto-select preferred subtitle once mpv reports the file ready.
+    if (!autoSelectDone && mpvCore->fileLoaded) {
+        maybeAutoSelectSubs();
     }
 
     // Auto-hide OSD after 5 seconds of inactivity (only when playing)
@@ -471,7 +440,7 @@ void VideoView::openSubDropdown() {
     std::vector<int64_t> ids;
     int selected = 0;
 
-    values.push_back("Off");
+    values.push_back("Desactivado (Off)");
     ids.push_back(0);
 
     for (const auto& t : subTracks) {
@@ -479,14 +448,14 @@ void VideoView::openSubDropdown() {
         if (name.empty()) name = "Pista " + std::to_string(t.id);
         values.push_back(name);
         ids.push_back(t.id);
-        if (t.selected) selected = (int)ids.size() - 1;
+        if (t.selected) selected = (int)values.size() - 1;
     }
 
     auto* dropdown = new brls::Dropdown("Subtítulos", values, [this, ids](int index) {
         if (index >= 0 && index < (int)ids.size()) {
             this->autoSelectDone = true;
             this->currentSubId = ids[index];
-            mpvCore->setSubTrack(this->currentSubId);
+            this->mpvCore->setSubTrack(this->currentSubId);
             this->showOSD();
         }
     }, selected);

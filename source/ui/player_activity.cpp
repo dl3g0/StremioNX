@@ -13,19 +13,9 @@ PlayerActivity::PlayerActivity(const std::string& url, const std::string& title,
     }
     videoView->setUrl(url);
 
-    // Fetch subtitles for this video from the subtitle addons (e.g.
-    // OpenSubtitles) in the background; they load into mpv as soon as they
-    // arrive and the file is ready. Guarded by `alive` so a late response
-    // after leaving the player does not touch a freed activity.
-    if (!subtitlesType.empty() && !subtitlesId.empty()) {
-        AddonManager::getInstance().fetchSubtitles(subtitlesType, subtitlesId,
-            [this, alive = this->alive](const std::vector<SubtitleItem>& subs) {
-                brls::sync([this, alive, subs]() {
-                    if (!*alive) return;
-                    if (videoView) videoView->setSubtitles(subs);
-                });
-            });
-    }
+    // External subtitle fetching disabled to avoid rate limits and HTTP 429 errors.
+    (void)subtitlesType;
+    (void)subtitlesId;
 
     this->registerAction("Salir", brls::ControllerButton::BUTTON_B, [this](brls::View* view) {
         brls::Application::popActivity();

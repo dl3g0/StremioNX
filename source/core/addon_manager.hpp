@@ -37,6 +37,7 @@ struct AddonManifest {
     std::string description;
     std::string logo;
     std::string url;
+    std::vector<std::string> resources;
 };
 
 struct StreamItem {

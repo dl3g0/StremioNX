@@ -6,17 +6,31 @@ Release **v0.3** de **StremioNX**, un cliente de Stremio para Nintendo Switch (h
 
 ## Cambios y Novedades en v0.3
 
-### Nuevas funcionalidades y optimizaciones
+### Hotfixes de emergencia y estabilidad en reproducción
 
-- **Motor de streaming por torrent (P2P / Torrentio)**:
-  1. Soporte completo de trackers devueltos por complementos como Torrentio (`sources`) y fallback de trackers de alta disponibilidad.
-  2. Resolución rápida de metadatos (BEP 9).
-  3. **Decodificación por Hardware GPU Tegra X1** (`hwdec = auto`, `vd-lavc-dr = yes`, `opengl-glfinish = yes`): reproducción a 1080p y 4K fluida sin caídas de frames ni sobrecarga de CPU.
-  4. **Caché en RAM de 128 MB**: buffer continuo para evitar congelaciones de reproducción.
-  5. Cancelación limpia con botón **(B)** en cualquier momento sin congelaciones ni cuelgues.
-- **Sincronización con cuenta Stremio**: inicio de sesión y sincronización directa de complementos desde tu cuenta oficial de Stremio.
-- **Ajustes como pestaña nativa**: interfaz moderna, fluida y 100% libre de crasheos de memoria o fugas.
-- **Servidor Web Local**: gestión de complementos vía `http://<ip-switch>:8080`.
+- **Solución definitiva a cuelgues por saturación de red / sockets**:
+  - Eliminada la inyección masiva concurrente de subtítulos externos que saturaba el límite de 16 sockets BSD del sistema operativo de la Switch.
+  - Subtítulos desactivados por defecto para arranque instantáneo de cualquier stream sin bloqueos.
+- **Compatibilidad con servidores y CDNs Debrid (TorBox, RealDebrid, AllDebrid, etc.)**:
+  - Configurado `User-Agent` de navegador moderno y cabeceras estándar para evitar errores `ERR_INVALID_RESPONSE` y bloqueos 403 Forbidden.
+  - Reconexión y reintentos automáticos de FFmpeg (`stream-lavf-o = reconnect=1,reconnect_streamed=1,reconnect_delay_max=5`) ante demoras de servidores Debrid.
+  - Eliminada la pausa forzada de búfer al arrancar (`demuxer-cache-wait`).
+- **Estabilidad de Audio y Video**:
+  - **Downmix automático a Stereo 48kHz PCM 16-bit** (`audio-format = s16`, `audio-samplerate = 48000`, `audio-channels = stereo`): elimina errores del chip de sonido (`ao/hos: Error writing audio to device`) y tartamudeos (*audio underruns*) en pistas de audio multicanal 5.1/7.1 (Dolby Digital, DTS, Atmos).
+  - **Aceleración por Hardware GPU Tegra X1** (`hwdec = auto`, `opengl-glfinish = yes`, `vd-lavc-dr = yes`): reproducción a 60 FPS sin sobrecarga de CPU.
+  - **Exclusión de carátulas adjuntas** (`audio-display = no`): evita que se muestren imágenes estáticas en lugar del video real.
+  - **Solución al bloqueo de fuentes de `libass` en Horizon OS** (`sub-font-provider = none`, `sub-font = sans-serif`).
+  - **Avance continuo de fotogramas**: integración directa de `mpv_render_context_update` en el bucle de dibujo de OpenGL.
+
+### Motor de streaming por torrent
+
+1. Soporte completo de trackers devueltos por complementos como Torrentio (`sources`) y fallback de trackers de alta disponibilidad.
+2. Resolución rápida de metadatos (BEP 9).
+3. **Caché en RAM de 128 MB**: buffer continuo para evitar congelaciones de reproducción.
+4. Cancelación limpia con botón **(B)** en cualquier momento sin congelaciones ni cuelgues.
+5. **Sincronización con cuenta Stremio**: inicio de sesión y sincronización directa de complementos desde tu cuenta oficial de Stremio.
+6. **Ajustes como pestaña nativa**: interfaz moderna, fluida y 100% libre de crasheos de memoria o fugas.
+7. **Servidor Web Local**: gestión de complementos vía `http://<ip-switch>:8080`.
 
 ## Características
 

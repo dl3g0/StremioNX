@@ -29,26 +29,19 @@ static void *get_proc_address(void *unused, const char *name) {
 }
 
 void MPVCore::on_update(void *self) {
-    MPVCore *core = static_cast<MPVCore *>(self);
-    if (!core || core->shuttingDown)
-        return;
-    brls::sync([core]() {
-        static int frameCount = 0;
-        uint64_t flags        = mpv_render_context_update(core->getContext());
-        if (flags & MPV_RENDER_UPDATE_FRAME) {
-            frameCount++;
-            if (frameCount == 1 || frameCount % 300 == 0) {
-                brls::Logger::info("DEBUG: update delivered frame #{}", frameCount);
-            }
-        }
-    });
+    (void)self;
 }
 
 void MPVCore::on_wakeup(void *self) {
     MPVCore *core = static_cast<MPVCore *>(self);
     if (!core || core->shuttingDown)
         return;
-    brls::sync([core]() { core->eventMainLoop(); });
+    if (core->wakeupQueued.exchange(true))
+        return;
+    brls::sync([core]() {
+        core->wakeupQueued.store(false);
+        core->eventMainLoop();
+    });
 }
 
 MPVCore::MPVCore() {
@@ -96,32 +89,46 @@ void MPVCore::init() {
     mpv_set_option_string(mpv, "idle", "yes");
     mpv_set_option_string(mpv, "keep-open", "yes");
     mpv_set_option_string(mpv, "ytdl", "no");
+    mpv_set_option_string(mpv, "audio-display", "no");
     mpv_set_option_string(mpv, "audio-channels", "stereo");
-    mpv_set_option_string(mpv, "audio-normalize-downmix", "no");
+    mpv_set_option_string(mpv, "audio-format", "s16");
+    mpv_set_option_string(mpv, "audio-samplerate", "48000");
+    mpv_set_option_string(mpv, "audio-normalize-downmix", "yes");
     mpv_set_option_string(mpv, "osd-level", "1");
     mpv_set_option_string(mpv, "video-timing-offset", "0");
     mpv_set_option_string(mpv, "hr-seek", "yes");
     mpv_set_option_string(mpv, "loop-file", "no");
+    mpv_set_option_string(mpv, "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    mpv_set_option_string(mpv, "http-header-fields", "Accept: */*");
+    mpv_set_option_string(mpv, "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,multiple_requests=1");
+    mpv_set_option_string(mpv, "demuxer-lavf-analyzeduration", "0.5");
+    mpv_set_option_string(mpv, "demuxer-lavf-probescore", "25");
+    mpv_set_option_string(mpv, "tls-verify", "no");
+    mpv_set_option_string(mpv, "network-timeout", "60");
     mpv_set_option_string(mpv, "cache", "yes");
     mpv_set_option_string(mpv, "cache-pause", "no");
     mpv_set_option_string(mpv, "demuxer-max-bytes", "128MiB");
+    mpv_set_option_string(mpv, "demuxer-max-back-bytes", "64MiB");
+    mpv_set_option_string(mpv, "demuxer-seekable-cache", "yes");
     mpv_set_option_string(mpv, "demuxer-readahead-secs", "30");
     mpv_set_option_string(mpv, "cache-secs", "60");
 
-    // Apply playback preferences (subtitle/audio defaults).
-    auto& playback = PlaybackSettings::getInstance();
-    mpv_set_option_string(mpv, "sub-visibility", playback.subsEnabled() ? "yes" : "no");
+    // Subtitles disabled by default so all streams load fast and without seeking.
+    mpv_set_option_string(mpv, "sub-visibility", "no");
+    mpv_set_option_string(mpv, "sid", "no");
+    mpv_set_option_string(mpv, "slang", "");
     mpv_set_option_string(mpv, "sub-ass", "yes");
-    if (playback.subsEnabled()) {
-        // Auto-select subtitles at load time. Switching tracks mid-playback
-        // forces mpv to seek to read the sub stream, which can hang on unstable
-        // streams (HTTP 429); selecting via slang at start avoids that.
-        mpv_set_option_string(mpv, "slang", playback.subsLang().c_str());
-    } else {
-        mpv_set_option_string(mpv, "slang", "");
-    }
+    mpv_set_option_string(mpv, "sub-font-provider", "none");
+    mpv_set_option_string(mpv, "sub-font", "sans-serif");
+
     // Default audio track preference.
-    mpv_set_option_string(mpv, "alang", playback.audioLang().c_str());
+    auto& playback = PlaybackSettings::getInstance();
+    std::string alang = playback.audioLang();
+    if (alang.find("spa") != std::string::npos || alang.find("es") != std::string::npos) {
+        mpv_set_option_string(mpv, "alang", "spa,es,lat,spanish");
+    } else {
+        mpv_set_option_string(mpv, "alang", alang.c_str());
+    }
 #if defined(__SWITCH__)
     {
         // The builtin "libmpv" profile sets config=no, which makes
@@ -286,6 +293,9 @@ void MPVCore::draw(brls::Rect area, float alpha) {
     if (!(this->rect == area)) setFrameSize(area);
     if (media_framebuffer == 0 || media_texture == 0) return;
 
+    uint64_t flags = mpv_render_context_update(this->mpv_context);
+    (void)flags;
+
     glBindFramebuffer(GL_FRAMEBUFFER, media_framebuffer);
     glViewport(0, 0, fbo_w, fbo_h);
     glDisable(GL_STENCIL_TEST);
@@ -316,9 +326,6 @@ void MPVCore::eventMainLoop() {
     while (true) {
         auto event = mpv_wait_event(this->mpv, 0);
         if (event->event_id == MPV_EVENT_NONE) return;
-        
-        if (event->event_id != MPV_EVENT_PROPERTY_CHANGE)
-            brls::Logger::info("DEBUG: MPV event: {}", (int)event->event_id);
         
         // Fire event to subscribers
         this->mpvEvent.fire((int)event->event_id);
@@ -424,7 +431,7 @@ void MPVCore::eventMainLoop() {
 
 void MPVCore::setUrl(const std::string &url) {
     if (!this->mpv) return;
-    brls::Logger::info("DEBUG: MPVCore::setUrl started");
+    brls::Logger::info("DEBUG: MPVCore::setUrl started for {}", url);
     if (url.rfind("torrent://", 0) == 0) {
         this->torrentTfs_ =
             stremio_torrent::TorrentPlayer::getInstance().getTorrentfs();
@@ -433,13 +440,25 @@ void MPVCore::setUrl(const std::string &url) {
         mpv_set_option_string(this->mpv, "cache-secs", "60");
         mpv_set_option_string(this->mpv, "demuxer-readahead-secs", "30");
         mpv_set_option_string(this->mpv, "demuxer-max-bytes", "128MiB");
+        mpv_set_option_string(this->mpv, "demuxer-max-back-bytes", "64MiB");
+        mpv_set_option_string(this->mpv, "demuxer-seekable-cache", "yes");
     } else {
-        mpv_set_option_string(this->mpv, "cache", "no");
+        this->torrentTfs_ = nullptr;
+        mpv_set_option_string(this->mpv, "cache", "yes");
+        mpv_set_option_string(this->mpv, "cache-pause", "no");
+        mpv_set_option_string(this->mpv, "cache-secs", "60");
+        mpv_set_option_string(this->mpv, "demuxer-readahead-secs", "30");
+        mpv_set_option_string(this->mpv, "demuxer-max-bytes", "128MiB");
+        mpv_set_option_string(this->mpv, "demuxer-max-back-bytes", "64MiB");
+        mpv_set_option_string(this->mpv, "demuxer-seekable-cache", "yes");
     }
+    int val = 0;
+    mpv_set_property(this->mpv, "pause", MPV_FORMAT_FLAG, &val);
+    mpv_set_property(this->mpv, "sub-visibility", MPV_FORMAT_FLAG, &val);
+    const char *no_str = "no";
+    mpv_set_property_string(this->mpv, "sid", no_str);
     const char *args[] = {"loadfile", url.c_str(), NULL};
-    brls::Logger::info("DEBUG: MPVCore::setUrl mpv_command_async calling");
     mpv_command_async(this->mpv, 0, args);
-    brls::Logger::info("DEBUG: MPVCore::setUrl mpv_command_async finished");
 }
 
 void MPVCore::resume() {
